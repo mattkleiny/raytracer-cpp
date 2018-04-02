@@ -33,6 +33,10 @@ struct Color {
     return Color(r + other.r, g + other.g, b + other.b, a + other.a);
   }
 
+  Color operator-(const Color &other) const {
+    return Color(r - other.r, g - other.g, b - other.b, a - other.a);
+  }
+
   Color operator*(const Color &other) const {
     return Color(r * other.r, g * other.g, b * other.b, a * other.a);
   }
@@ -95,7 +99,15 @@ struct Vector {
   float x, y, z;
 
   float dot(const Vector &other) const {
-    return 1.0f; // TODO: implement me
+    return x * other.x + y * other.y + z * other.z;
+  }
+
+  Vector negate() const {
+    return Vector(-x, -y, -z);
+  }
+
+  Vector operator*(float value) const {
+    return Vector(x * value, y * value, z * value);
   }
 
   Vector operator+(const Vector &other) const {
@@ -104,10 +116,6 @@ struct Vector {
 
   Vector operator-(const Vector &other) const {
     return Vector(x - other.x, y - other.y, z - other.z);
-  }
-
-  Vector negate() const {
-    return Vector(-x, -y, -z);
   }
 
   static const Vector Zero;
@@ -128,7 +136,10 @@ struct Ray {
 
   /** Reflects the ray about the given position via the given normal. */
   Ray reflect(const Vector &position, const Vector &normal) const {
-    // TODO: implement me
+    auto origin    = position + normal;
+    auto direction = this->direction - normal * 2.0f * this->direction.dot(normal);
+
+    return Ray(origin, direction);
   }
 
   /** Refracts the ray about the given position via the given normal. */
@@ -142,7 +153,9 @@ struct Ray {
 
 /** Defines the material for some scene node. */
 struct Material {
-  Material(const Color &diffuse) : diffuse(diffuse), reflectivity(0), transparency(0) {}
+  Material(const Color &diffuse) : Material(diffuse, 0, 0) {}
+  Material(const Color &diffuse, float reflectivity, float transpareny)
+      : diffuse(diffuse), reflectivity(reflectivity), transparency(transpareny) {}
 
   const Color diffuse;
   const float reflectivity;
@@ -160,6 +173,7 @@ struct Light {
 /** Defines a camera in the scene. */
 struct Camera {
   Camera() : Camera(Vector::Zero, 75.0) {}
+  Camera(const Vector &position) : Camera(position, 75.0) {}
   Camera(const Vector &position, float fieldOfView) : position(position), fieldOfView(fieldOfView) {}
 
   Vector position;
@@ -169,8 +183,10 @@ struct Camera {
 /** Defines a node for use in scene rendering. */
 class SceneNode {
  public:
-  virtual bool intersects(const Ray &ray) const =0;
+  virtual bool intersects(const Ray &ray, float &distance) const =0;
+
   virtual const Material &material() const =0;
+  virtual const Vector &position() const =0;
 };
 
 /** Defines a sphere in the scene. */
@@ -179,12 +195,16 @@ class Sphere : public SceneNode {
   Sphere(const Vector &center, float radius, const Material &material)
       : center_(center), radius_(radius), material_(material) {}
 
-  bool intersects(const Ray &ray) const override {
+  bool intersects(const Ray &ray, float &distance) const override {
     return false; // TODO: implement me
   }
 
   const Material &material() const override {
     return material_;
+  }
+
+  const Vector &position() const override {
+    return center_;
   }
 
  private:
@@ -199,12 +219,16 @@ class Cube : public SceneNode {
   Cube(const Vector &center, float radius, const Material &material)
       : center_(center), radius_(radius), material_(material) {}
 
-  bool intersects(const Ray &ray) const override {
+  bool intersects(const Ray &ray, float &distance) const override {
     return false; // TODO: implement me
   }
 
   const Material &material() const override {
     return material_;
+  }
+
+  const Vector &position() const override {
+    return center_;
   }
 
  private:
@@ -260,7 +284,8 @@ class Scene {
 
   /** Samples the color by projecting the given ray into the scene. */
   Color sample(const Ray &ray, int depth, const int maxDepth) const {
-    SceneNode *node = nullptr;
+    float     distance = 0.0f;
+    SceneNode *node    = nullptr;
     Vector    hit(0, 0, 0);
     Vector    normal(0, 0, 0);
 
@@ -301,7 +326,7 @@ class Scene {
 
         // determine if the object is in shadow, eliminate color transmission
         for (const auto &other : nodes_) {
-          if (other->intersects(lightRay)) {
+          if (other->intersects(lightRay, distance)) {
             transmission = Color::Black;
             break;
           }
@@ -316,13 +341,27 @@ class Scene {
 
   /** Determines if any scene node intersects the given ray. */
   bool findIntersection(const Ray &ray, SceneNode *&intersection, Vector &hit, Vector &normal) const {
+    auto distance = 0.0f;
+    auto nearest  = 999999999.0f;
+
+    // find the nearest object along the ray direction
     for (const auto &node : nodes_) {
-      if (node->intersects(ray)) {
-        // TODO: calculate normal
-        intersection = node;
-        return true;
+      if (node->intersects(ray, distance)) {
+        if (distance < nearest) {
+          nearest      = distance;
+          intersection = node;
+        }
       }
     }
+
+    // calculate hit and normals
+    if (intersection != nullptr) {
+      hit    = ray.origin + ray.direction * nearest;
+      normal = hit - intersection->position();
+
+      return true;
+    }
+
     return false;
   }
 
@@ -386,7 +425,7 @@ class SceneBuilder {
 // the scene to be rendered by the ray-tracer
 static const auto scene = SceneBuilder()
     .setBackgroundColor(Color::White)
-    .setCamera(Camera(Vector::Zero, 75))
+    .setCamera(Vector::Zero)
     .addLight(Light(Vector(-20, 30, 20), Color::White))
     .addNode(new Sphere(Vector(5, -1, -15), 2.0, Color::Red))
     .addNode(new Sphere(Vector(3, 0, -35), 2.0, Color::Green))
