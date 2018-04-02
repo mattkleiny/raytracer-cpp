@@ -1,6 +1,12 @@
+#
+# Copyright 2018, the project authors. All rights reserved.
+# Use of this source code is governed by a MIT-style
+# license that can be found in the LICENSE.md file.
+#
+
 cmake_minimum_required(VERSION 3.10)
 project(raytracer)
 
 set(CMAKE_CXX_STANDARD 17)
 
-add_executable(raytracer main.cpp)
+add_executable(raytracer raytracer.cpp)
