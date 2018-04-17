@@ -14,6 +14,15 @@
 /** Minimum resolution for our floating point comparisons. */
 const float Epsilon = 1e-6;
 
+/** Clamps the given value between it's given lower and upper bounds. */
+template<typename T>
+static inline T clamp(const T &value, const T &lower, const T &upper) {
+  if (value < lower) return lower;
+  if (value > upper) return upper;
+
+  return value;
+}
+
 /** Defines a simple optional value that encodes the presence/absence of an result. */
 template<typename T>
 class Optional {
@@ -53,6 +62,15 @@ struct Color {
   float g;
   float b;
   float a;
+
+  Color clamp() const {
+    return Color(
+        ::clamp(r, 0.0f, 1.0f),
+        ::clamp(g, 0.0f, 1.0f),
+        ::clamp(b, 0.0f, 1.0f),
+        ::clamp(a, 0.0f, 1.0f)
+    );
+  }
 
   Color operator*(float other) const {
     return Color(r * other, g * other, b * other, a * other);
@@ -392,7 +410,7 @@ class Scene {
 
             const auto color = material.albedo * light.emissive * lightPower * lightReflected;
 
-            image->set(x, y, color);
+            image->set(x, y, color.clamp());
           }
         } else {
           // sample the background color, otherwise
