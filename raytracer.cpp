@@ -612,11 +612,12 @@ int main() {
     const auto scene = SceneBuilder()
         .setBackgroundColor(Color::Black)
         .setCamera(Camera(90.0f))
-        .addNode(new Sphere(Vector(3, 0, -5), 1.0, Color::Green))
-        .addNode(new Sphere(Vector(-3, 0, -5), 1.0, Color::Red))
-        .addNode(new Plane(Vector(0, -3, 0), -Vector::UnitY, Color::White))
-        .addLight(new DirectionalLight(-Vector::UnitY, Color::White, 0.8f))
-        .addLight(new DirectionalLight(-Vector::UnitX, Color::White, 0.3f))
+        .addNode(new Sphere(Vector(5, -1, -15), 2.0, Material(Color::Blue, 0.33f, 0.1f)))
+        .addNode(new Sphere(Vector(3, 0, -35), 1.0, Color::Green))
+        .addNode(new Sphere(Vector(-5.5, 0, -15), 1.0, Color::Red))
+        .addNode(new Plane(Vector(0, -4, 0), -Vector::UnitY, Color::White))
+        .addLight(new DirectionalLight(Vector(-1, -1, 0), Color::White, 1.0f))
+        .addLight(new DirectionalLight(Vector(1, -1, 0), Color::White, 0.33f))
         .build();
 
     // render the scene into an in-memory bitmap
