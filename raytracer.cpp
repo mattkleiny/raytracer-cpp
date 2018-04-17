@@ -11,6 +11,38 @@
 #include <cassert>
 #include <png++/png.hpp>
 
+/** Minimum resolution for our floating point comparisons. */
+const float Epsilon = 1e-6;
+
+/** Defines a simple optional value that encodes the presence/absence of an result. */
+template<typename T>
+class Optional {
+ public:
+  Optional() : valid_(false) {}
+  Optional(const T &value) : value_(value), valid_(true) {}
+
+  T value() const {
+    assert(valid_);
+    return value_;
+  }
+
+  bool valid() const {
+    return valid_;
+  }
+
+ private:
+  T    value_;
+  bool valid_;
+};
+
+/** Returns an optional value with the given value. */
+template<typename T>
+static Optional<T> some(const T &value) { return Optional<T>(value); }
+
+/** Returns an optional value without any value. */
+template<typename T>
+static Optional<T> none() { return Optional<T>(); }
+
 /** Defines a color in RGBA color space. */
 struct Color {
   Color() : Color(0, 0, 0) {}
@@ -141,6 +173,10 @@ struct Vector {
     return Vector(x - other.x, y - other.y, z - other.z);
   }
 
+  Vector operator-() const {
+    return Vector(-x, -y, -z);
+  }
+
   static const Vector Zero;
   static const Vector UnitX;
   static const Vector UnitY;
@@ -173,11 +209,11 @@ struct Ray {
 
 /** Defines the material for some scene node. */
 struct Material {
-  Material(const Color &diffuse) : Material(diffuse, 0, 0) {}
-  Material(const Color &diffuse, float reflectivity, float transpareny)
-      : diffuse(diffuse), reflectivity(reflectivity), transparency(transpareny) {}
+  Material(const Color &albedo) : Material(albedo, 0, 0) {}
+  Material(const Color &albedo, float reflectivity, float transpareny)
+      : albedo(albedo), reflectivity(reflectivity), transparency(transpareny) {}
 
-  Color diffuse;
+  Color albedo;
   float reflectivity;
   float transparency;
 };
@@ -201,9 +237,8 @@ struct Camera {
 /** Defines a node for use in scene rendering. */
 class SceneNode {
  public:
-  virtual bool intersects(const Ray &ray) const =0;
-
-  virtual const Material &getMaterial() const =0;
+  virtual Optional<Vector> intersects(const Ray &ray) const =0;
+  virtual const Material &material() const =0;
 };
 
 /** Defines a sphere in the scene. */
@@ -212,21 +247,56 @@ class Sphere : public SceneNode {
   Sphere(const Vector &center, float radius, const Material &material)
       : center_(center), radius_(radius), material_(material) {}
 
-  bool intersects(const Ray &ray) const override {
+  Optional<Vector> intersects(const Ray &ray) const override {
     auto line     = center_ - ray.origin;
     auto adjacent = line.dot(ray.direction);
     auto distance = line.dot(line) - (adjacent * adjacent);
 
-    return distance < (radius_ * radius_);
+    if (distance < (radius_ * radius_)) {
+      return some(Vector::Zero);
+    }
+
+    return none<Vector>();
   }
 
-  const Material &getMaterial() const override {
+  const Material &material() const override {
     return material_;
   }
 
  private:
   Vector   center_;
   float    radius_;
+  Material material_;
+};
+
+/** Defines a plane in the scene. */
+class Plane : public SceneNode {
+ public:
+  Plane(const Vector &point, const Vector &normal, const Material &material)
+      : point_(point), normal_(normal), material_(material) {}
+
+  Optional<Vector> intersects(const Ray &ray) const override {
+    const auto d = normal_.dot(ray.direction);
+
+    if (d >= Epsilon) {
+      const auto direction = point_ - ray.origin;
+      const auto distance  = direction.dot(normal_) / d;
+
+      if (distance >= 0.0f) {
+        return some(Vector::Zero);
+      }
+    }
+
+    return none<Vector>();
+  }
+
+  const Material &material() const override {
+    return material_;
+  }
+
+ private:
+  Vector   point_;
+  Vector   normal_;
   Material material_;
 };
 
@@ -262,13 +332,7 @@ class Scene {
         const auto ray = project(x, y, width, height);
 
         for (const auto &node : nodes_) {
-          if (node->intersects(ray)) {
-            // if the ray intersects with an object, apply it's material to the image
-            image->set(x, y, node->getMaterial().diffuse);
-          } else {
-            // otherwise, sample the background color
-            image->set(x, y, backgroundColor_);
-          }
+          // TODO: implement core algorithm
         }
       }
     }
@@ -286,15 +350,13 @@ class Scene {
     auto sensor_x       = ((((x + 0.5) / width) * 2.0 - 1.0) * aspect_ratio) * fov_adjustment;
     auto sensor_y       = (1.0f - ((y + 0.5) / height) * 2.0) * fov_adjustment;
 
-    auto direction = Vector(sensor_x, sensor_y, -1.0).normalize();
+    auto direction = Vector(static_cast<float>(sensor_x), static_cast<float>(sensor_y), -1.0f).normalize();
 
     return Ray(Vector::Zero, direction);
   }
 
   /** Converts the given value to radians from degrees. */
-  inline static float to_radians(float degrees) {
-
-  }
+  inline static float to_radians(float degrees) { return static_cast<float>(degrees * (M_PI / 180.0)); }
 
  private:
   Camera                   camera_;
@@ -347,19 +409,19 @@ class SceneBuilder {
 int main() {
   try {
     // the scene to be rendered by the ray-tracer
-    std::cout << "Building scene configuration" << std::endl;
     const auto scene = SceneBuilder()
         .setBackgroundColor(Color::Black)
         .setCamera(Camera(90.0f))
-        .addNode(new Sphere(Vector(0, 0, -5), 1.0, Color::Green))
+        .addNode(new Sphere(Vector(3, 0, -5), 1.0, Color::Green))
+        .addNode(new Sphere(Vector(-3, 0, -5), 1.0, Color::Red))
+        .addNode(new Plane(Vector(0, -3, 0), -Vector::UnitY, Color::Red))
+        .addLight(Light(Vector::Zero, Color::White))
         .build();
 
     // render the scene into an in-memory bitmap
-    std::cout << "Rendering scene to image" << std::endl;
     const auto image = scene->render(800, 600);
 
     // render the bitmap to a .png file
-    std::cout << "Rendering image to .PNG file" << std::endl;
     image->save("output.png");
   } catch (const std::exception &e) {
     std::cerr << "An unexpected error occurred:" << e.what() << std::endl;
