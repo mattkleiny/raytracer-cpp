@@ -251,13 +251,47 @@ struct Material {
 };
 
 /** Defines a light in the scene. */
-struct Light {
-  Light(const Vector &direction, const Color &emissive, double intensity)
+class Light {
+ public:
+  /** The possible types of lights that we support. */
+  enum Type {
+    DIRECTIONAL,
+    SPHERICAL
+  };
+
+ public:
+  /** Retrieves the type of light implemented. */
+  virtual Type type() const =0;
+};
+
+/** Implements a directional light in the scene. */
+class DirectionalLight : public Light {
+ public:
+  DirectionalLight(const Vector &direction, const Color &emissive, double intensity)
       : direction(direction), emissive(emissive), intensity(intensity) {}
 
   Vector direction;
   Color  emissive;
   double intensity;
+
+  Type type() const override {
+    return DIRECTIONAL;
+  }
+};
+
+/** Implements a spherical light in the scene. */
+class SphericalLight : public Light {
+ public:
+  SphericalLight(const Vector &position, const Color &emissive, double intensity)
+      : position(position), emissive(emissive), intensity(intensity) {}
+
+  Vector position;
+  Color  emissive;
+  double intensity;
+
+  Type type() const override {
+    return SPHERICAL;
+  }
 };
 
 /** Defines a camera in the scene. */
@@ -404,19 +438,46 @@ class Scene {
           // evaluate color for this pixel based on the object and it's surrounding lights
           auto color = Color::Black;
 
-          for (const auto &light : lights_) {
-            const auto directionToLight = -light->direction;
+          for (const auto &light__ : lights_) {
+            switch (light__->type()) {
+              case Light::Type::DIRECTIONAL: {
+                const auto light = dynamic_cast<DirectionalLight *>(light__);
 
-            // cast a ray from the intersection point back to the light to see if we're in shadow
-            const auto shadowRay = Ray(hitPoint + surfaceNormal * Epsilon, directionToLight);
-            const auto inShadow  = trace(shadowRay).valid();
+                const auto directionToLight = -light->direction;
 
-            // mix light color based on distance and intensity
-            const auto lightPower     = surfaceNormal.dot(directionToLight) * (inShadow ? 0.0f : light->intensity);
-            const auto lightReflected = material.albedo / M_PI;
-            const auto lightColor     = light->emissive * lightPower * lightReflected;
+                // cast a ray from the intersection point back to the light to see if we're in shadow
+                const auto shadowRay = Ray(hitPoint + surfaceNormal * Epsilon, directionToLight);
+                const auto inShadow  = trace(shadowRay).valid();
 
-            color = color + material.albedo * lightColor;
+                // mix light color based on distance and intensity
+                const auto lightPower     = surfaceNormal.dot(directionToLight) * (inShadow ? 0.0f : light->intensity);
+                const auto lightReflected = material.albedo / M_PI;
+                const auto lightColor     = light->emissive * lightPower * lightReflected;
+
+                color = color + material.albedo * lightColor;
+              }
+                break;
+
+              case Light::Type::SPHERICAL: {
+                const auto light = dynamic_cast<SphericalLight *>(light__);
+
+                const auto distanceToLight  = (light->position - hitPoint).normalize();
+                const auto directionToLight = distanceToLight;
+
+                // cast a ray from the intersection point back to the light to see if we're in shadow
+                const auto shadowRay          = Ray(hitPoint + surfaceNormal * Epsilon, directionToLight);
+                const auto shadowIntersection = trace(shadowRay);
+                const auto inLight            = !shadowIntersection.valid() || shadowIntersection.value().distance > (light->position - hitPoint).magnitude();
+
+                // mix light color based on distance and intensity
+                const auto lightPower     = surfaceNormal.dot(directionToLight) * (inLight ? (light->intensity / (4.0 * M_PI * distance)) : 0.0f);
+                const auto lightReflected = material.albedo / M_PI;
+                const auto lightColor     = light->emissive * lightPower * lightReflected;
+
+                color = color + material.albedo * lightColor;
+              }
+                break;
+            }
           }
 
           // sample the resultant color
@@ -541,8 +602,9 @@ int main() {
         .addNode(new Sphere(Vector(3, 0, -5), 1.0, Color::Green))
         .addNode(new Sphere(Vector(-3, 0, -5), 1.0, Color::Red))
         .addNode(new Plane(Vector(0, -3, 0), -Vector::UnitY, Color::White))
-        .addLight(new Light(-Vector::UnitY, Color::White, 0.8f))
-        .addLight(new Light(-Vector::UnitX, Color::White, 0.3f))
+        .addLight(new DirectionalLight(-Vector::UnitY, Color::White, 0.8f))
+        .addLight(new DirectionalLight(-Vector::UnitX, Color::White, 0.3f))
+        .addLight(new SphericalLight(Vector::Zero, Color::White, 0.5f))
         .build();
 
     // render the scene into an in-memory bitmap
