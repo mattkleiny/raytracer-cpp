@@ -43,24 +43,23 @@ static Optional<T> some(const T &value) { return Optional<T>(value); }
 template<typename T>
 static Optional<T> none() { return Optional<T>(); }
 
-/** Defines a color in RGBA color space. */
+/** Defines a color in floating-point RGBA color space. */
 struct Color {
   Color() : Color(0, 0, 0) {}
-  Color(uint8_t red, uint8_t green, uint8_t blue) : Color(red, green, blue, 255) {}
-  Color(uint8_t red, uint8_t green, uint8_t blue, uint8_t alpha) : r(red), g(green), b(blue), a(alpha) {}
+  Color(float red, float green, float blue) : Color(red, green, blue, 1.0f) {}
+  Color(float red, float green, float blue, float alpha) : r(red), g(green), b(blue), a(alpha) {}
 
-  union {
-    struct {
-      uint8_t r;
-      uint8_t g;
-      uint8_t b;
-      uint8_t a;
-    };
-    uint32_t packed;
-  };
+  float r;
+  float g;
+  float b;
+  float a;
 
   Color operator*(float other) const {
     return Color(r * other, g * other, b * other, a * other);
+  }
+
+  Color operator/(float other) const {
+    return Color(r / other, g / other, b / other, a / other);
   }
 
   Color operator+(const Color &other) const {
@@ -84,10 +83,10 @@ struct Color {
 
 // commonly used colors
 const Color Color::Black(0, 0, 0);
-const Color Color::Red(255, 0, 0);
-const Color Color::Green(0, 255, 0);
-const Color Color::Blue(0, 0, 255);
-const Color Color::White(255, 255, 255);
+const Color Color::Red(1, 0, 0);
+const Color Color::Green(0, 1, 0);
+const Color Color::Blue(0, 0, 1);
+const Color Color::White(1, 1, 1);
 
 /** A bitmapped image of pixels. */
 class Image {
@@ -124,8 +123,15 @@ class Image {
 
     for (uint32_t y = 0; y < height_; ++y) {
       for (uint32_t x = 0; x < width_; ++x) {
+        // sample the color, re-encode with gamma for PNG output.
         const auto color = pixels_[x + y * width_];
-        const auto pixel = png::basic_rgba_pixel<uint8_t>(color.r, color.g, color.b, color.a);
+
+        const auto pixel = png::basic_rgba_pixel<uint8_t>(
+            static_cast<uint8_t>(correctGamma(color.r) * 255.0f),
+            static_cast<uint8_t>(correctGamma(color.g) * 255.0f),
+            static_cast<uint8_t>(correctGamma(color.b) * 255.0f),
+            255
+        );
 
         image.set_pixel(x, y, pixel);
       }
@@ -135,6 +141,13 @@ class Image {
   }
 
  private:
+  /** Corrects gamma over the given linear input. */
+  static inline float correctGamma(float linear) {
+    const float Gamma = 2.2f;
+
+    return static_cast<float>(pow(linear, 1.0f / Gamma));
+  }
+
   uint32_t width_;
   uint32_t height_;
 
@@ -222,11 +235,12 @@ struct Material {
 
 /** Defines a light in the scene. */
 struct Light {
-  Light(const Vector &position, const Color &emissive)
-      : position(position), emissive(emissive) {}
+  Light(const Vector &direction, const Color &emissive, float intensity)
+      : direction(direction), emissive(emissive), intensity(intensity) {}
 
-  Vector position;
+  Vector direction;
   Color  emissive;
+  float  intensity;
 };
 
 /** Defines a camera in the scene. */
@@ -243,6 +257,9 @@ class SceneNode {
   /** Determines if the object intersects with the given ray,
    * and returns the distance along the ray at which the intersection occurs. */
   virtual Optional<float> intersects(const Ray &ray) const =0;
+
+  /** Calculates the normal of the surface of the object at the given hit point. */
+  virtual Vector calculateNormal(const Vector &point) const =0;
 
   /** Returns the material to use when rendering this node. */
   virtual const Material &material() const =0;
@@ -277,6 +294,10 @@ class Sphere : public SceneNode {
     return some(static_cast<float>(distance));
   }
 
+  Vector calculateNormal(const Vector &point) const override {
+    return (point - center_).normalize();
+  }
+
   const Material &material() const override {
     return material_;
   }
@@ -306,6 +327,10 @@ class Plane : public SceneNode {
     }
 
     return none<float>();
+  }
+
+  Vector calculateNormal(const Vector &point) const override {
+    return -normal_;
   }
 
   const Material &material() const override {
@@ -344,14 +369,31 @@ class Scene {
     for (int y = 0; y < height; ++y) {
       for (int x = 0; x < width; ++x) {
         // project a ray into the scene for each pixel in our resultant image
-        const auto ray  = project(x, y, width, height);
-        const auto node = findClosestNode(ray);
+        const auto ray          = project(x, y, width, height);
+        const auto intersection = findClosestNode(ray);
 
         // if we're able to locate a valid object for this ray
-        if (node.valid()) {
-          // sample the node's material
-          const auto material = node.value()->material();
-          image->set(x, y, material.albedo);
+        if (intersection.valid()) {
+          const auto distance = intersection.value().distance;
+          const auto node     = intersection.value().node;
+          const auto material = node->material();
+
+          // calculate the hit point on the surface of the object
+          const auto hitPoint      = ray.origin + (ray.direction * distance);
+          const auto surfaceNormal = node->calculateNormal(hitPoint);
+
+          // evaluate lights relative to the object
+          for (const auto &light : lights_) {
+            const auto directionToLight = -light.direction;
+
+            // mix light color based on distance and intensity
+            const auto lightPower     = surfaceNormal.dot(directionToLight) * light.intensity;
+            const auto lightReflected = material.albedo / M_PI;
+
+            const auto color = material.albedo * light.emissive * lightPower * lightReflected;
+
+            image->set(x, y, color);
+          }
         } else {
           // sample the background color, otherwise
           image->set(x, y, backgroundColor_);
@@ -361,6 +403,16 @@ class Scene {
 
     return image;
   }
+
+ private:
+  /** Contains information about an intersection in the scene. */
+  struct Intersection {
+    Intersection() : Intersection(nullptr, 0.0f) {}
+    Intersection(SceneNode *node, float distance) : node(node), distance(distance) {}
+
+    SceneNode *node;
+    float     distance;
+  };
 
  private:
   /** Projects a ray into the scene at the given coordinates. */
@@ -378,7 +430,7 @@ class Scene {
   }
 
   /** Projects a ray into the scene, attempting to locate the closest object. */
-  Optional<SceneNode *> findClosestNode(const Ray &ray) const {
+  Optional<Intersection> findClosestNode(const Ray &ray) const {
     SceneNode *result  = nullptr;
     float     distance = 9999999999.0f;
 
@@ -399,10 +451,10 @@ class Scene {
     }
 
     if (result != nullptr) {
-      return some(result);
+      return some(Intersection(result, distance));
     }
 
-    return none<SceneNode *>();
+    return none<Intersection>();
   }
 
   /** Converts the given value to radians from degrees. */
@@ -465,7 +517,7 @@ int main() {
         .addNode(new Sphere(Vector(3, 0, -5), 1.0, Color::Green))
         .addNode(new Sphere(Vector(-3, 0, -5), 1.0, Color::Red))
         .addNode(new Plane(Vector(0, -3, 0), -Vector::UnitY, Color::White))
-        .addLight(Light(Vector::Zero, Color::White))
+        .addLight(Light(-Vector::UnitY, Color::White, 0.8f))
         .build();
 
     // render the scene into an in-memory bitmap
