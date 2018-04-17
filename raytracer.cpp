@@ -16,12 +16,15 @@ const double Epsilon = 1e-7;
 
 /** Clamps the given value between it's given lower and upper bounds. */
 template<typename T>
-static inline T clamp(const T &value, const T &lower, const T &upper) {
+inline static T clamp(const T &value, const T &lower, const T &upper) {
   if (value < lower) return lower;
   if (value > upper) return upper;
 
   return value;
 }
+
+/** Converts the given value to radians from degrees. */
+inline static double toRadians(double degrees) { return degrees * (M_PI / 180.0); }
 
 /** Defines a simple optional value that encodes the presence/absence of an result. */
 template<typename T>
@@ -30,11 +33,14 @@ class Optional {
   Optional() : valid_(false) {}
   Optional(const T &value) : value_(value), valid_(true) {}
 
+  /** Retrieves the underlying value from the optional.
+   * Asserts the value is valid before accessing. */
   T value() const {
     assert(valid_);
     return value_;
   }
 
+  /** Determines if the value is present. */
   bool valid() const {
     return valid_;
   }
@@ -46,11 +52,15 @@ class Optional {
 
 /** Returns an optional value with the given value. */
 template<typename T>
-static Optional<T> some(const T &value) { return Optional<T>(value); }
+static Optional<T> some(const T &value) {
+  return Optional<T>(value);
+}
 
 /** Returns an optional value without any value. */
 template<typename T>
-static Optional<T> none() { return Optional<T>(); }
+static Optional<T> none() {
+  return Optional<T>();
+}
 
 /** Defines a color in floating-point RGBA color space. */
 struct Color {
@@ -63,6 +73,7 @@ struct Color {
   double b;
   double a;
 
+  /** Clamps all of the color ranges between (0, 1). */
   Color clamp() const {
     return Color(
         ::clamp(r, 0.0, 1.0),
@@ -141,17 +152,16 @@ class Image {
 
     for (uint32_t y = 0; y < height_; ++y) {
       for (uint32_t x = 0; x < width_; ++x) {
-        // sample the color, re-encode with gamma for PNG output.
-        const auto color = pixels_[x + y * width_];
-
-        const auto pixel = png::basic_rgba_pixel<uint8_t>(
-            static_cast<uint8_t>(correctGamma(color.r) * 255.0),
-            static_cast<uint8_t>(correctGamma(color.g) * 255.0),
-            static_cast<uint8_t>(correctGamma(color.b) * 255.0),
+        // sample the pixel, re-encode to byte representation with gamma correction
+        const auto pixel     = pixels_[x + y * width_];
+        const auto corrected = png::basic_rgba_pixel<uint8_t>(
+            static_cast<uint8_t>(gamma(pixel.r) * 255.0),
+            static_cast<uint8_t>(gamma(pixel.g) * 255.0),
+            static_cast<uint8_t>(gamma(pixel.b) * 255.0),
             255
         );
 
-        image.set_pixel(x, y, pixel);
+        image.set_pixel(x, y, corrected);
       }
     }
 
@@ -160,10 +170,9 @@ class Image {
 
  private:
   /** Corrects gamma over the given linear input. */
-  static inline double correctGamma(double linear) {
-    const double Gamma = 2.2f;
-
-    return pow(linear, 1.0f / Gamma);
+  static inline double gamma(double linear) {
+    const double Factor = 2.2f;
+    return pow(linear, 1.0f / Factor);
   }
 
   uint32_t width_;
@@ -225,16 +234,6 @@ const Vector Vector::UnitZ(0, 0, 1);
 struct Ray {
   Ray(const Vector &origin, const Vector &direction)
       : origin(origin), direction(direction) {}
-
-  /** Reflects the ray about the given position via the given normal. */
-  Ray reflect(const Vector &position, const Vector &normal) const {
-    // TODO: implement me
-  }
-
-  /** Refracts the ray about the given position via the given normal. */
-  Ray refract(const Vector &position, const Vector &normal, bool inside) const {
-    // TODO: implement me
-  }
 
   Vector origin;
   Vector direction;
@@ -363,8 +362,6 @@ class Plane : public SceneNode {
 
 /** Defines a scene for use in our ray-tracing algorithm. */
 class Scene {
-  static const int MaxTraceDepth = 3;
-
  public:
   Scene(const Color &backgroundColor,
         const Camera &camera,
@@ -387,39 +384,38 @@ class Scene {
     for (int y = 0; y < height; ++y) {
       for (int x = 0; x < width; ++x) {
         // project a ray into the scene for each pixel in our resultant image
-        const auto primeRay     = project(x, y, width, height);
-        const auto intersection = trace(primeRay);
+        const auto cameraRay    = project(x, y, width, height);
+        const auto intersection = trace(cameraRay);
 
-        // if we're able to locate a valid object for this ray
-        // TODO: extract this into a function
+        // if we're able to locate a valid intersection for this ray
         if (intersection.valid()) {
           const auto distance = intersection.value().distance;
           const auto node     = intersection.value().node;
           const auto material = node->material();
 
           // calculate the hit point on the surface of the object
-          const auto hitPoint      = primeRay.origin + (primeRay.direction * distance);
+          const auto hitPoint      = cameraRay.origin + cameraRay.direction * distance;
           const auto surfaceNormal = node->calculateNormal(hitPoint);
 
-          // evaluate lights relative to the object
+          // evaluate color for this pixel based on the object and it's surrounding lights
           auto color = Color::Black;
 
           for (const auto &light : lights_) {
-            // cast a ray from the hit point back to the light to see if we're in shadow
             const auto directionToLight = -light.direction;
 
+            // cast a ray from the intersection point back to the light to see if we're in shadow
             const auto shadowRay = Ray(hitPoint + surfaceNormal * Epsilon, directionToLight);
             const auto inShadow  = trace(shadowRay).valid();
 
             // mix light color based on distance and intensity
-            const auto lightPower     = surfaceNormal.dot(directionToLight) * inShadow ? 0.0f : light.intensity;
+            const auto lightPower     = surfaceNormal.dot(directionToLight) * (inShadow ? 0.0f : light.intensity);
             const auto lightReflected = material.albedo / M_PI;
-            const auto lightColor     = (light.emissive * lightPower * lightReflected).clamp();
+            const auto lightColor     = light.emissive * lightPower * lightReflected;
 
             color = color + material.albedo * lightColor;
           }
 
-          // sample the resultant mixed color
+          // sample the resultant color
           image->set(x, y, color.clamp());
         } else {
           // sample the background color, otherwise
@@ -432,7 +428,7 @@ class Scene {
   }
 
  private:
-  /** Contains information about an intersection in the scene. */
+  /** Contains information about an intersection in the scene when tracing rays */
   struct Intersection {
     Intersection() : Intersection(nullptr, 0.0f) {}
     Intersection(SceneNode *node, double distance) : node(node), distance(distance) {}
@@ -441,17 +437,16 @@ class Scene {
     double    distance;
   };
 
- private:
   /** Projects a ray into the scene at the given coordinates. */
   Ray project(double x, double y, double width, double height) const {
     assert(width > height);
 
-    const auto fov_adjustment = tan(to_radians(camera_.fieldOfView) / 2.0);
-    const auto aspect_ratio   = width / height;
-    const auto sensor_x       = ((((x + 0.5) / width) * 2.0 - 1.0) * aspect_ratio) * fov_adjustment;
-    const auto sensor_y       = (1.0f - ((y + 0.5) / height) * 2.0) * fov_adjustment;
+    const auto fovAdjustment = tan(toRadians(camera_.fieldOfView) / 2.0);
+    const auto aspectRatio   = width / height;
+    const auto sensorX       = ((((x + 0.5) / width) * 2.0 - 1.0) * aspectRatio) * fovAdjustment;
+    const auto sensorY       = (1.0f - ((y + 0.5) / height) * 2.0) * fovAdjustment;
 
-    const auto direction = Vector(sensor_x, sensor_y, -1.0f).normalize();
+    const auto direction = Vector(sensorX, sensorY, -1.0f).normalize();
 
     return Ray(Vector::Zero, direction);
   }
@@ -467,25 +462,23 @@ class Scene {
 
       // if our ray intersects with the node
       if (intersection.valid()) {
-        const auto d = intersection.value();
+        const auto hitDistance = intersection.value();
 
         // and the intersection point is the closest we've located so far
-        if (d < distance) {
-          distance = d;
+        if (hitDistance < distance) {
+          distance = hitDistance;
           result   = node; // then record the result
         }
       }
     }
 
+    // if we've managed to locate an object, yield it's distance and node
     if (result != nullptr) {
       return some(Intersection(result, distance));
     }
 
     return none<Intersection>();
   }
-
-  /** Converts the given value to radians from degrees. */
-  inline static double to_radians(double degrees) { return degrees * (M_PI / 180.0); }
 
  private:
   Camera                   camera_;
