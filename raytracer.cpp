@@ -250,6 +250,15 @@ struct Material {
   double transparency;
 };
 
+/** Encapsulates UV texture mapping coordinates. */
+struct UV {
+  UV() : UV(0, 0) {}
+  UV(double u, double v) : u(u), v(v) {}
+
+  double u;
+  double v;
+};
+
 /** Defines a light in the scene. */
 class Light {
  public:
@@ -309,8 +318,11 @@ class SceneNode {
    * and returns the distance along the ray at which the intersection occurs. */
   virtual Optional<double> intersects(const Ray &ray) const =0;
 
-  /** Calculates the normal of the surface of the object at the given hit point. */
+  /** Calculates the normal of the surface of the object at the given point. */
   virtual Vector calculateNormal(const Vector &point) const =0;
+
+  /** Calculates the UV of the surface of the object at the given point. */
+  virtual UV calculateUV(const Vector &point) const =0;
 
   /** Returns the material to use when rendering this node. */
   virtual const Material &material() const =0;
@@ -349,6 +361,15 @@ class Sphere : public SceneNode {
     return (point - center_).normalize();
   }
 
+  UV calculateUV(const Vector &point) const override {
+    const auto spherical = point - center_;
+
+    const auto u = (1.0 + (atan2(spherical.z, spherical.x) / M_PI)) * 0.5;
+    const auto v = acos(spherical.y / radius_) / M_PI;
+
+    return UV(u, v);
+  }
+
   const Material &material() const override {
     return material_;
   }
@@ -382,6 +403,10 @@ class Plane : public SceneNode {
 
   Vector calculateNormal(const Vector &point) const override {
     return -normal_;
+  }
+
+  UV calculateUV(const Vector &point) const override {
+    return UV(0, 0); // TODO: implement me
   }
 
   const Material &material() const override {
@@ -439,6 +464,7 @@ class Scene {
           auto color = Color::Black;
 
           for (const auto &light__ : lights_) {
+            // TODO: tidy this up
             switch (light__->type()) {
               case Light::Type::DIRECTIONAL: {
                 const auto light = dynamic_cast<DirectionalLight *>(light__);
@@ -459,6 +485,7 @@ class Scene {
                 break;
 
               case Light::Type::SPHERICAL: {
+                // TODO: fix spherical lighting
                 const auto light = dynamic_cast<SphericalLight *>(light__);
 
                 const auto distanceToLight  = (light->position - hitPoint).normalize();
@@ -604,7 +631,6 @@ int main() {
         .addNode(new Plane(Vector(0, -3, 0), -Vector::UnitY, Color::White))
         .addLight(new DirectionalLight(-Vector::UnitY, Color::White, 0.8f))
         .addLight(new DirectionalLight(-Vector::UnitX, Color::White, 0.3f))
-        .addLight(new SphericalLight(Vector::Zero, Color::White, 0.5f))
         .build();
 
     // render the scene into an in-memory bitmap
