@@ -246,7 +246,7 @@ struct Material {
   Material(const Color &albedo, double reflectivity, double transpareny)
       : albedo(albedo), reflectivity(reflectivity), transparency(transpareny) {}
 
-  Color albedo;
+  Color  albedo;
   double reflectivity;
   double transparency;
 };
@@ -258,7 +258,7 @@ struct Light {
 
   Vector direction;
   Color  emissive;
-  double  intensity;
+  double intensity;
 };
 
 /** Defines a camera in the scene. */
@@ -322,7 +322,7 @@ class Sphere : public SceneNode {
 
  private:
   Vector   center_;
-  double    radius_;
+  double   radius_;
   Material material_;
 };
 
@@ -402,6 +402,8 @@ class Scene {
           const auto surfaceNormal = node->calculateNormal(hitPoint);
 
           // evaluate lights relative to the object
+          auto color = Color::Black;
+
           for (const auto &light : lights_) {
             // cast a ray from the hit point back to the light to see if we're in shadow
             const auto directionToLight = -light.direction;
@@ -412,11 +414,13 @@ class Scene {
             // mix light color based on distance and intensity
             const auto lightPower     = surfaceNormal.dot(directionToLight) * inShadow ? 0.0f : light.intensity;
             const auto lightReflected = material.albedo / M_PI;
+            const auto lightColor     = (light.emissive * lightPower * lightReflected).clamp();
 
-            const auto color = material.albedo * light.emissive * lightPower * lightReflected;
-
-            image->set(x, y, color.clamp());
+            color = color + material.albedo * lightColor;
           }
+
+          // sample the resultant mixed color
+          image->set(x, y, color.clamp());
         } else {
           // sample the background color, otherwise
           image->set(x, y, backgroundColor_);
@@ -434,7 +438,7 @@ class Scene {
     Intersection(SceneNode *node, double distance) : node(node), distance(distance) {}
 
     SceneNode *node;
-    double     distance;
+    double    distance;
   };
 
  private:
@@ -455,7 +459,7 @@ class Scene {
   /** Projects a ray into the scene, attempting to locate the closest object. */
   Optional<Intersection> trace(const Ray &ray) const {
     SceneNode *result  = nullptr;
-    double     distance = 9999999999.0f;
+    double    distance = 9999999999.0f;
 
     // walk through all nodes in the scene
     for (const auto &node : nodes_) {
@@ -541,6 +545,7 @@ int main() {
         .addNode(new Sphere(Vector(-3, 0, -5), 1.0, Color::Red))
         .addNode(new Plane(Vector(0, -3, 0), -Vector::UnitY, Color::White))
         .addLight(Light(-Vector::UnitY, Color::White, 0.8f))
+        .addLight(Light(-Vector::UnitX, Color::White, 0.3f))
         .build();
 
     // render the scene into an in-memory bitmap
