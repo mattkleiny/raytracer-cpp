@@ -449,51 +449,7 @@ class Scene {
           const auto surfaceNormal = node->calculateNormal(hitPoint);
 
           // evaluate color for this pixel based on the object and it's surrounding lights
-          auto color = Color::Black;
-
-          for (const auto &light__ : lights_) {
-            // TODO: tidy this up
-            switch (light__->type()) {
-              case Light::Type::DIRECTIONAL: {
-                const auto light = dynamic_cast<DirectionalLight *>(light__.get());
-
-                const auto directionToLight = -light->direction;
-
-                // cast a ray from the intersection point back to the light to see if we're in shadow
-                const auto shadowRay = Ray(hitPoint + surfaceNormal * Epsilon, directionToLight);
-                const auto inShadow  = trace(shadowRay).valid();
-
-                // mix light color based on distance and intensity
-                const auto lightPower     = surfaceNormal.dot(directionToLight) * (inShadow ? 0.0f : light->intensity);
-                const auto lightReflected = material.albedo / M_PI;
-                const auto lightColor     = light->emissive * lightPower * lightReflected;
-
-                color = color + material.albedo * lightColor;
-              }
-                break;
-
-              case Light::Type::SPHERICAL: {
-                // TODO: fix spherical lighting
-                const auto light = dynamic_cast<SphericalLight *>(light__.get());
-
-                const auto distanceToLight  = (light->position - hitPoint).normalize();
-                const auto directionToLight = distanceToLight;
-
-                // cast a ray from the intersection point back to the light to see if we're in shadow
-                const auto shadowRay          = Ray(hitPoint + surfaceNormal * Epsilon, directionToLight);
-                const auto shadowIntersection = trace(shadowRay);
-                const auto inLight            = !shadowIntersection.valid() || shadowIntersection.value().distance > (light->position - hitPoint).magnitude();
-
-                // mix light color based on distance and intensity
-                const auto lightPower     = surfaceNormal.dot(directionToLight) * (inLight ? (light->intensity / (4.0 * M_PI * distance)) : 0.0f);
-                const auto lightReflected = material.albedo / M_PI;
-                const auto lightColor     = light->emissive * lightPower * lightReflected;
-
-                color = color + material.albedo * lightColor;
-              }
-                break;
-            }
-          }
+          const auto color = light(distance, material, hitPoint, surfaceNormal);
 
           // sample the resultant color
           image->set(x, y, color.clamp());
@@ -556,6 +512,62 @@ class Scene {
     return result;
   }
 
+  /** Applies lighting to some object's material by evaluating all lights in the scene relative to it's intersection information. */
+  Color light(const double distance,
+              const Material &material,
+              const Vector &hitPoint,
+              const Vector &surfaceNormal) const {
+    auto color = Color::Black;
+
+    // walk through all lights in the scene
+    for (const auto &light__ : lights_) {
+      // individually handle each lighting algorithm
+      // TODO: tidy up polymorphic lights
+      switch (light__->type()) {
+        case Light::DIRECTIONAL: {
+          const auto light = dynamic_cast<DirectionalLight *>(light__.get());
+
+          const auto directionToLight = -light->direction;
+
+          // cast a ray from the intersection point back to the light to see if we're in shadow
+          const auto shadowRay = Ray(hitPoint + surfaceNormal * Epsilon, directionToLight);
+          const auto inShadow  = trace(shadowRay).valid();
+
+          // mix light color based on distance and intensity
+          const auto lightPower     = surfaceNormal.dot(directionToLight) * (inShadow ? 0.0f : light->intensity);
+          const auto lightReflected = material.albedo / M_PI;
+          const auto lightColor     = light->emissive * lightPower * lightReflected;
+
+          color = color + material.albedo * lightColor;
+        }
+          break;
+
+        case Light::SPHERICAL: {
+          // TODO: fix spherical lighting
+          const auto light = dynamic_cast<SphericalLight *>(light__.get());
+
+          const auto distanceToLight  = (light->position - hitPoint).normalize();
+          const auto directionToLight = distanceToLight;
+
+          // cast a ray from the intersection point back to the light to see if we're in shadow
+          const auto shadowRay          = Ray(hitPoint + surfaceNormal * Epsilon, directionToLight);
+          const auto shadowIntersection = trace(shadowRay);
+          const auto inLight            = !shadowIntersection.valid() || shadowIntersection.value().distance > (light->position - hitPoint).magnitude();
+
+          // mix light color based on distance and intensity
+          const auto lightPower     = surfaceNormal.dot(directionToLight) * (inLight ? (light->intensity / (4.0 * M_PI * distance)) : 0.0f);
+          const auto lightReflected = material.albedo / M_PI;
+          const auto lightColor     = light->emissive * lightPower * lightReflected;
+
+          color = color + material.albedo * lightColor;
+        }
+          break;
+      }
+    }
+
+    return color;
+  }
+
  private:
   Color  backgroundColor_;
   Camera camera_;
@@ -611,17 +623,17 @@ int main() {
     // the scene to be rendered by the ray-tracer
     const auto scene = SceneBuilder()
         .setBackgroundColor(Color::Black)
-        .setCamera(Camera(90.0f))
+        .setCamera(Camera(70.0))
         .addNode(new Sphere(Vector(5, -1, -15), 2.0, Material(Color::Blue, 0.33f, 0.1f)))
         .addNode(new Sphere(Vector(3, 0, -35), 1.0, Color::Green))
         .addNode(new Sphere(Vector(-5.5, 0, -15), 1.0, Color::Red))
-        .addNode(new Plane(Vector(0, -4, 0), -Vector::UnitY, Color::White))
+        .addNode(new Plane(Vector(0, -4.2, 0), -Vector::UnitY, Color::White))
         .addLight(new DirectionalLight(Vector(-1, -1, 0), Color::White, 1.0f))
         .addLight(new DirectionalLight(Vector(1, -1, 0), Color::White, 0.33f))
         .build();
 
     // render the scene into an in-memory bitmap
-    const auto image = scene->render(1920, 1080);
+    const auto image = scene->render(800, 600);
 
     // render the bitmap to a .png file
     image->save("output.png");
