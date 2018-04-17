@@ -387,8 +387,8 @@ class Scene {
     for (int y = 0; y < height; ++y) {
       for (int x = 0; x < width; ++x) {
         // project a ray into the scene for each pixel in our resultant image
-        const auto ray          = project(x, y, width, height);
-        const auto intersection = findClosestNode(ray);
+        const auto primeRay     = project(x, y, width, height);
+        const auto intersection = trace(primeRay);
 
         // if we're able to locate a valid object for this ray
         if (intersection.valid()) {
@@ -397,15 +397,19 @@ class Scene {
           const auto material = node->material();
 
           // calculate the hit point on the surface of the object
-          const auto hitPoint      = ray.origin + (ray.direction * distance);
+          const auto hitPoint      = primeRay.origin + (primeRay.direction * distance);
           const auto surfaceNormal = node->calculateNormal(hitPoint);
 
           // evaluate lights relative to the object
           for (const auto &light : lights_) {
             const auto directionToLight = -light.direction;
 
+            // cast a ray from the hit point back to the light to see if we're in shadow
+            const auto shadowRay = Ray(hitPoint, directionToLight);
+            const auto inShadow  = trace(shadowRay).valid();
+
             // mix light color based on distance and intensity
-            const auto lightPower     = surfaceNormal.dot(directionToLight) * light.intensity;
+            const auto lightPower     = surfaceNormal.dot(directionToLight) * inShadow ? 0.0f : light.intensity;
             const auto lightReflected = material.albedo / M_PI;
 
             const auto color = material.albedo * light.emissive * lightPower * lightReflected;
@@ -448,7 +452,7 @@ class Scene {
   }
 
   /** Projects a ray into the scene, attempting to locate the closest object. */
-  Optional<Intersection> findClosestNode(const Ray &ray) const {
+  Optional<Intersection> trace(const Ray &ray) const {
     SceneNode *result  = nullptr;
     float     distance = 9999999999.0f;
 
