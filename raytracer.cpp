@@ -31,7 +31,7 @@ template<typename T>
 class Optional {
  public:
   Optional() : valid_(false) {}
-  Optional(const T &value) : value_(value), valid_(true) {}
+  Optional(T value) : value_(std::move(value)), valid_(true) {}
 
   /** Retrieves the underlying value from the optional.
    * Asserts the value is valid before accessing. */
@@ -117,7 +117,7 @@ const Color Color::Green(0, 1, 0);
 const Color Color::Blue(0, 0, 1);
 const Color Color::White(1, 1, 1);
 
-/** A bitmapped image of pixels. */
+/** A bit-mapped image of pixels. */
 class Image {
  public:
   Image(uint32_t width, uint32_t height)
@@ -129,19 +129,19 @@ class Image {
     delete[] pixels_;
   }
 
-  const uint32_t width() const { return width_; }
-  const uint32_t height() const { return height_; }
+  uint32_t width() const { return width_; }
+  uint32_t height() const { return height_; }
 
-  const Color &get(int x, int y) const {
-    assert(x >= 0 && x < width_);
-    assert(y >= 0 && y < height_);
+  const Color &get(uint32_t x, uint32_t y) const {
+    assert(x < width_);
+    assert(y < height_);
 
     return pixels_[x + y * width_];
   }
 
-  void set(int x, int y, const Color &color) {
-    assert(x >= 0 && x < width_);
-    assert(y >= 0 && y < height_);
+  void set(uint32_t x, uint32_t y, const Color &color) {
+    assert(x < width_);
+    assert(y < height_);
 
     pixels_[x + y * width_] = color;
   }
@@ -268,7 +268,6 @@ class Light {
     SPHERICAL
   };
 
- public:
   /** Retrieves the type of light implemented. */
   virtual Type type() const =0;
 };
@@ -306,7 +305,7 @@ class SphericalLight : public Light {
 /** Defines a camera in the scene. */
 struct Camera {
   Camera() : Camera(90.0f) {}
-  Camera(double fieldOfView) : fieldOfView(fieldOfView) {}
+  explicit Camera(double fieldOfView) : fieldOfView(fieldOfView) {}
 
   double fieldOfView;
 };
@@ -424,28 +423,17 @@ class Scene {
  public:
   Scene(const Color &backgroundColor,
         const Camera &camera,
-        const std::vector<Light *> &lights,
-        const std::vector<SceneNode *> &nodes)
-      : backgroundColor_(backgroundColor), camera_(camera), lights_(lights), nodes_(nodes) {
-  }
-
-  ~Scene() {
-    // we've taken direct ownership of the scene nodes and lights;
-    // so go ahead and manually deallocate them
-    for (const auto light: lights_) {
-      delete light;
-    }
-    for (const auto node : nodes_) {
-      delete node;
-    }
+        std::vector<std::shared_ptr<Light>> lights,
+        std::vector<std::shared_ptr<SceneNode>> nodes)
+      : backgroundColor_(backgroundColor), camera_(camera), lights_(std::move(lights)), nodes_(std::move(nodes)) {
   }
 
   /** Renders the scene to an image of RGBA pixels. */
   auto render(uint32_t width, uint32_t height) const {
     auto image = std::make_unique<Image>(width, height);
 
-    for (int y = 0; y < height; ++y) {
-      for (int x = 0; x < width; ++x) {
+    for (uint32_t y = 0; y < height; ++y) {
+      for (uint32_t x = 0; x < width; ++x) {
         // project a ray into the scene for each pixel in our resultant image
         const auto cameraRay    = project(x, y, width, height);
         const auto intersection = trace(cameraRay);
@@ -467,7 +455,7 @@ class Scene {
             // TODO: tidy this up
             switch (light__->type()) {
               case Light::Type::DIRECTIONAL: {
-                const auto light = dynamic_cast<DirectionalLight *>(light__);
+                const auto light = dynamic_cast<DirectionalLight *>(light__.get());
 
                 const auto directionToLight = -light->direction;
 
@@ -486,7 +474,7 @@ class Scene {
 
               case Light::Type::SPHERICAL: {
                 // TODO: fix spherical lighting
-                const auto light = dynamic_cast<SphericalLight *>(light__);
+                const auto light = dynamic_cast<SphericalLight *>(light__.get());
 
                 const auto distanceToLight  = (light->position - hitPoint).normalize();
                 const auto directionToLight = distanceToLight;
@@ -523,10 +511,11 @@ class Scene {
   /** Contains information about an intersection in the scene when tracing rays */
   struct Intersection {
     Intersection() : Intersection(nullptr, 0.0f) {}
-    Intersection(SceneNode *node, double distance) : node(node), distance(distance) {}
+    Intersection(std::shared_ptr<SceneNode> node, double distance)
+        : node(std::move(node)), distance(distance) {}
 
-    SceneNode *node;
-    double    distance;
+    std::shared_ptr<SceneNode> node;
+    double                     distance;
   };
 
   /** Projects a ray into the scene at the given coordinates. */
@@ -545,8 +534,8 @@ class Scene {
 
   /** Projects a ray into the scene, attempting to locate the closest object. */
   Optional<Intersection> trace(const Ray &ray) const {
-    SceneNode *result  = nullptr;
-    double    distance = 9999999999.0f;
+    auto   result   = none<Intersection>();
+    double distance = 9999999999.0f;
 
     // walk through all nodes in the scene
     for (const auto &node : nodes_) {
@@ -559,24 +548,20 @@ class Scene {
         // and the intersection point is the closest we've located so far
         if (hitDistance < distance) {
           distance = hitDistance;
-          result   = node; // then record the result
+          result   = some(Intersection(node, distance)); // then record the result
         }
       }
     }
 
-    // if we've managed to locate an object, yield it's distance and node
-    if (result != nullptr) {
-      return some(Intersection(result, distance));
-    }
-
-    return none<Intersection>();
+    return result;
   }
 
  private:
-  Camera                   camera_;
-  Color                    backgroundColor_;
-  std::vector<Light *>     lights_;
-  std::vector<SceneNode *> nodes_;
+  Color  backgroundColor_;
+  Camera camera_;
+
+  std::vector<std::shared_ptr<Light>>     lights_;
+  std::vector<std::shared_ptr<SceneNode>> nodes_;
 };
 
 /** A builder syntax for constructing new scenes. */
@@ -593,12 +578,12 @@ class SceneBuilder {
   }
 
   SceneBuilder &addLight(Light *light) {
-    lights_.push_back(light);
+    lights_.push_back(std::shared_ptr<Light>(light));
     return *this;
   }
 
   SceneBuilder &addNode(SceneNode *node) {
-    nodes_.push_back(node);
+    nodes_.push_back(std::shared_ptr<SceneNode>(node));
     return *this;
   }
 
@@ -613,10 +598,11 @@ class SceneBuilder {
   }
 
  private:
-  Camera                   camera_;
-  Color                    backgroundColor_;
-  std::vector<Light *>     lights_;
-  std::vector<SceneNode *> nodes_;
+  Camera camera_;
+  Color  backgroundColor_;
+
+  std::vector<std::shared_ptr<Light>>     lights_;
+  std::vector<std::shared_ptr<SceneNode>> nodes_;
 };
 
 /** Entry point for the ray-tracer. */
