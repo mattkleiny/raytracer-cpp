@@ -11,8 +11,8 @@
 #include <cassert>
 #include <png++/png.hpp>
 
-/** Minimum resolution for our floating point comparisons. */
-const float Epsilon = 1e-6;
+/** Minimum resolution for our floating-point comparisons. */
+const double Epsilon = 1e-7;
 
 /** Clamps the given value between it's given lower and upper bounds. */
 template<typename T>
@@ -55,28 +55,28 @@ static Optional<T> none() { return Optional<T>(); }
 /** Defines a color in floating-point RGBA color space. */
 struct Color {
   Color() : Color(0, 0, 0) {}
-  Color(float red, float green, float blue) : Color(red, green, blue, 1.0f) {}
-  Color(float red, float green, float blue, float alpha) : r(red), g(green), b(blue), a(alpha) {}
+  Color(double red, double green, double blue) : Color(red, green, blue, 1.0f) {}
+  Color(double red, double green, double blue, double alpha) : r(red), g(green), b(blue), a(alpha) {}
 
-  float r;
-  float g;
-  float b;
-  float a;
+  double r;
+  double g;
+  double b;
+  double a;
 
   Color clamp() const {
     return Color(
-        ::clamp(r, 0.0f, 1.0f),
-        ::clamp(g, 0.0f, 1.0f),
-        ::clamp(b, 0.0f, 1.0f),
-        ::clamp(a, 0.0f, 1.0f)
+        ::clamp(r, 0.0, 1.0),
+        ::clamp(g, 0.0, 1.0),
+        ::clamp(b, 0.0, 1.0),
+        ::clamp(a, 0.0, 1.0)
     );
   }
 
-  Color operator*(float other) const {
+  Color operator*(double other) const {
     return Color(r * other, g * other, b * other, a * other);
   }
 
-  Color operator/(float other) const {
+  Color operator/(double other) const {
     return Color(r / other, g / other, b / other, a / other);
   }
 
@@ -145,9 +145,9 @@ class Image {
         const auto color = pixels_[x + y * width_];
 
         const auto pixel = png::basic_rgba_pixel<uint8_t>(
-            static_cast<uint8_t>(correctGamma(color.r) * 255.0f),
-            static_cast<uint8_t>(correctGamma(color.g) * 255.0f),
-            static_cast<uint8_t>(correctGamma(color.b) * 255.0f),
+            static_cast<uint8_t>(correctGamma(color.r) * 255.0),
+            static_cast<uint8_t>(correctGamma(color.g) * 255.0),
+            static_cast<uint8_t>(correctGamma(color.b) * 255.0),
             255
         );
 
@@ -160,10 +160,10 @@ class Image {
 
  private:
   /** Corrects gamma over the given linear input. */
-  static inline float correctGamma(float linear) {
-    const float Gamma = 2.2f;
+  static inline double correctGamma(double linear) {
+    const double Gamma = 2.2f;
 
-    return static_cast<float>(pow(linear, 1.0f / Gamma));
+    return pow(linear, 1.0f / Gamma);
   }
 
   uint32_t width_;
@@ -175,16 +175,16 @@ class Image {
 /** Defines a vector in 3-space. */
 struct Vector {
   Vector() : Vector(0, 0, 0) {}
-  Vector(float x, float y, float z) : x(x), y(y), z(z) {}
+  Vector(double x, double y, double z) : x(x), y(y), z(z) {}
 
-  float x, y, z;
+  double x, y, z;
 
-  float dot(const Vector &other) const {
+  double dot(const Vector &other) const {
     return x * other.x + y * other.y + z * other.z;
   }
 
-  float magnitude() const {
-    return static_cast<float>(sqrt(x * x + y * y + z * z));
+  double magnitude() const {
+    return sqrt(x * x + y * y + z * z);
   }
 
   Vector normalize() const {
@@ -193,7 +193,7 @@ struct Vector {
     return Vector(x / magnitude, y / magnitude, z / magnitude);
   }
 
-  Vector operator*(float value) const {
+  Vector operator*(double value) const {
     return Vector(x * value, y * value, z * value);
   }
 
@@ -243,30 +243,30 @@ struct Ray {
 /** Defines the material for some scene node. */
 struct Material {
   Material(const Color &albedo) : Material(albedo, 0, 0) {}
-  Material(const Color &albedo, float reflectivity, float transpareny)
+  Material(const Color &albedo, double reflectivity, double transpareny)
       : albedo(albedo), reflectivity(reflectivity), transparency(transpareny) {}
 
   Color albedo;
-  float reflectivity;
-  float transparency;
+  double reflectivity;
+  double transparency;
 };
 
 /** Defines a light in the scene. */
 struct Light {
-  Light(const Vector &direction, const Color &emissive, float intensity)
+  Light(const Vector &direction, const Color &emissive, double intensity)
       : direction(direction), emissive(emissive), intensity(intensity) {}
 
   Vector direction;
   Color  emissive;
-  float  intensity;
+  double  intensity;
 };
 
 /** Defines a camera in the scene. */
 struct Camera {
   Camera() : Camera(90.0f) {}
-  Camera(float fieldOfView) : fieldOfView(fieldOfView) {}
+  Camera(double fieldOfView) : fieldOfView(fieldOfView) {}
 
-  float fieldOfView;
+  double fieldOfView;
 };
 
 /** Defines a node for use in scene rendering. */
@@ -274,7 +274,7 @@ class SceneNode {
  public:
   /** Determines if the object intersects with the given ray,
    * and returns the distance along the ray at which the intersection occurs. */
-  virtual Optional<float> intersects(const Ray &ray) const =0;
+  virtual Optional<double> intersects(const Ray &ray) const =0;
 
   /** Calculates the normal of the surface of the object at the given hit point. */
   virtual Vector calculateNormal(const Vector &point) const =0;
@@ -286,17 +286,17 @@ class SceneNode {
 /** Defines a sphere in the scene. */
 class Sphere : public SceneNode {
  public:
-  Sphere(const Vector &center, float radius, const Material &material)
+  Sphere(const Vector &center, double radius, const Material &material)
       : center_(center), radius_(radius), material_(material) {}
 
-  Optional<float> intersects(const Ray &ray) const override {
+  Optional<double> intersects(const Ray &ray) const override {
     const auto line      = center_ - ray.origin;
     const auto adjacent  = line.dot(ray.direction);
     const auto distance2 = line.dot(line) - (adjacent * adjacent);
     const auto radius2   = radius_ * radius_;
 
     if (distance2 > radius2) {
-      return none<float>();
+      return none<double>();
     }
 
     const auto thc = sqrt(radius2 - distance2);
@@ -304,12 +304,12 @@ class Sphere : public SceneNode {
     const auto t1  = adjacent + thc;
 
     if (t0 < 0.0 && t1 < 0.0) {
-      return none<float>();
+      return none<double>();
     }
 
     const auto distance = t0 < t1 ? t0 : t1;
 
-    return some(static_cast<float>(distance));
+    return some(distance);
   }
 
   Vector calculateNormal(const Vector &point) const override {
@@ -322,7 +322,7 @@ class Sphere : public SceneNode {
 
  private:
   Vector   center_;
-  float    radius_;
+  double    radius_;
   Material material_;
 };
 
@@ -332,7 +332,7 @@ class Plane : public SceneNode {
   Plane(const Vector &point, const Vector &normal, const Material &material)
       : point_(point), normal_(normal), material_(material) {}
 
-  Optional<float> intersects(const Ray &ray) const override {
+  Optional<double> intersects(const Ray &ray) const override {
     const auto d = normal_.dot(ray.direction);
 
     if (d >= Epsilon) {
@@ -344,7 +344,7 @@ class Plane : public SceneNode {
       }
     }
 
-    return none<float>();
+    return none<double>();
   }
 
   Vector calculateNormal(const Vector &point) const override {
@@ -391,6 +391,7 @@ class Scene {
         const auto intersection = trace(primeRay);
 
         // if we're able to locate a valid object for this ray
+        // TODO: extract this into a function
         if (intersection.valid()) {
           const auto distance = intersection.value().distance;
           const auto node     = intersection.value().node;
@@ -402,10 +403,10 @@ class Scene {
 
           // evaluate lights relative to the object
           for (const auto &light : lights_) {
+            // cast a ray from the hit point back to the light to see if we're in shadow
             const auto directionToLight = -light.direction;
 
-            // cast a ray from the hit point back to the light to see if we're in shadow
-            const auto shadowRay = Ray(hitPoint, directionToLight);
+            const auto shadowRay = Ray(hitPoint + surfaceNormal * Epsilon, directionToLight);
             const auto inShadow  = trace(shadowRay).valid();
 
             // mix light color based on distance and intensity
@@ -430,15 +431,15 @@ class Scene {
   /** Contains information about an intersection in the scene. */
   struct Intersection {
     Intersection() : Intersection(nullptr, 0.0f) {}
-    Intersection(SceneNode *node, float distance) : node(node), distance(distance) {}
+    Intersection(SceneNode *node, double distance) : node(node), distance(distance) {}
 
     SceneNode *node;
-    float     distance;
+    double     distance;
   };
 
  private:
   /** Projects a ray into the scene at the given coordinates. */
-  Ray project(float x, float y, float width, float height) const {
+  Ray project(double x, double y, double width, double height) const {
     assert(width > height);
 
     const auto fov_adjustment = tan(to_radians(camera_.fieldOfView) / 2.0);
@@ -446,7 +447,7 @@ class Scene {
     const auto sensor_x       = ((((x + 0.5) / width) * 2.0 - 1.0) * aspect_ratio) * fov_adjustment;
     const auto sensor_y       = (1.0f - ((y + 0.5) / height) * 2.0) * fov_adjustment;
 
-    const auto direction = Vector(static_cast<float>(sensor_x), static_cast<float>(sensor_y), -1.0f).normalize();
+    const auto direction = Vector(sensor_x, sensor_y, -1.0f).normalize();
 
     return Ray(Vector::Zero, direction);
   }
@@ -454,7 +455,7 @@ class Scene {
   /** Projects a ray into the scene, attempting to locate the closest object. */
   Optional<Intersection> trace(const Ray &ray) const {
     SceneNode *result  = nullptr;
-    float     distance = 9999999999.0f;
+    double     distance = 9999999999.0f;
 
     // walk through all nodes in the scene
     for (const auto &node : nodes_) {
@@ -480,7 +481,7 @@ class Scene {
   }
 
   /** Converts the given value to radians from degrees. */
-  inline static float to_radians(float degrees) { return static_cast<float>(degrees * (M_PI / 180.0)); }
+  inline static double to_radians(double degrees) { return degrees * (M_PI / 180.0); }
 
  private:
   Camera                   camera_;
