@@ -4,10 +4,12 @@
  * license that can be found in the LICENSE.md file.
  */
 
+#include <iostream>
 #include <memory>
 #include <vector>
 #include <cmath>
 #include <cassert>
+#include <png++/png.hpp>
 
 /** Defines a color in RGBA color space. */
 struct Color {
@@ -55,40 +57,55 @@ const Color Color::Green(0, 255, 0);
 const Color Color::Blue(0, 0, 255);
 const Color Color::White(255, 255, 255);
 
-/** A bitmapped image of pixels with variable type. */
-template<typename TPixel>
+/** A bitmapped image of pixels. */
 class Image {
  public:
-  Image(int32_t width, uint32_t height) : width_(width), height_(height) {
-    pixels_ = new TPixel[width * height];
+  Image(uint32_t width, uint32_t height) : width_(width), height_(height) {
+    pixels_ = new Color[width * height];
   }
 
   ~Image() {
     delete[] pixels_;
   }
 
-  const int32_t width() const { return width_; }
-  const int32_t height() const { return height_; }
+  const uint32_t width() const { return width_; }
+  const uint32_t height() const { return height_; }
 
-  const TPixel &get(int x, int y) const {
+  const Color &get(int x, int y) const {
     assert(x >= 0 && x < width_);
     assert(y >= 0 && y < height_);
 
     return pixels_[x + y * width_];
   }
 
-  void set(int x, int y, const TPixel &color) {
+  void set(int x, int y, const Color &color) {
     assert(x >= 0 && x < width_);
     assert(y >= 0 && y < height_);
 
     pixels_[x + y * width_] = color;
   }
 
- private:
-  int32_t width_;
-  int32_t height_;
+  /** Exports the image to a file at the given path. */
+  void save(const char *path) const {
+    auto image = png::image<png::basic_rgba_pixel<uint8_t>>(width_, height_);
 
-  TPixel *pixels_;
+    for (uint32_t y = 0; y < height_; ++y) {
+      for (uint32_t x = 0; x < width_; ++x) {
+        const auto color = pixels_[x + y * width_];
+        const auto pixel = png::basic_rgba_pixel<uint8_t>(color.r, color.g, color.b, color.a);
+
+        image.set_pixel(x, y, pixel);
+      }
+    }
+
+    image.write(path);
+  }
+
+ private:
+  uint32_t width_;
+  uint32_t height_;
+
+  Color *pixels_;
 };
 
 /** Defines a vector in 3-space. */
@@ -102,8 +119,14 @@ struct Vector {
     return x * other.x + y * other.y + z * other.z;
   }
 
-  Vector negate() const {
-    return Vector(-x, -y, -z);
+  float magnitude() const {
+    return static_cast<float>(sqrt(x * x + y * y + z * z));
+  }
+
+  Vector normalize() const {
+    auto magnitude = this->magnitude();
+
+    return Vector(x / magnitude, y / magnitude, z / magnitude);
   }
 
   Vector operator*(float value) const {
@@ -136,10 +159,7 @@ struct Ray {
 
   /** Reflects the ray about the given position via the given normal. */
   Ray reflect(const Vector &position, const Vector &normal) const {
-    auto origin    = position + normal;
-    auto direction = this->direction - normal * 2.0f * this->direction.dot(normal);
-
-    return Ray(origin, direction);
+    // TODO: implement me
   }
 
   /** Refracts the ray about the given position via the given normal. */
@@ -147,8 +167,8 @@ struct Ray {
     // TODO: implement me
   }
 
-  const Vector origin;
-  const Vector direction;
+  Vector origin;
+  Vector direction;
 };
 
 /** Defines the material for some scene node. */
@@ -157,9 +177,9 @@ struct Material {
   Material(const Color &diffuse, float reflectivity, float transpareny)
       : diffuse(diffuse), reflectivity(reflectivity), transparency(transpareny) {}
 
-  const Color diffuse;
-  const float reflectivity;
-  const float transparency;
+  Color diffuse;
+  float reflectivity;
+  float transparency;
 };
 
 /** Defines a light in the scene. */
@@ -172,21 +192,18 @@ struct Light {
 
 /** Defines a camera in the scene. */
 struct Camera {
-  Camera() : Camera(Vector::Zero, 75.0) {}
-  Camera(const Vector &position) : Camera(position, 75.0) {}
-  Camera(const Vector &position, float fieldOfView) : position(position), fieldOfView(fieldOfView) {}
+  Camera() : Camera(90.0f) {}
+  Camera(float fieldOfView) : fieldOfView(fieldOfView) {}
 
-  Vector position;
-  float  fieldOfView;
+  float fieldOfView;
 };
 
 /** Defines a node for use in scene rendering. */
 class SceneNode {
  public:
-  virtual bool intersects(const Ray &ray, float &distance) const =0;
+  virtual bool intersects(const Ray &ray) const =0;
 
-  virtual const Material &material() const =0;
-  virtual const Vector &position() const =0;
+  virtual const Material &getMaterial() const =0;
 };
 
 /** Defines a sphere in the scene. */
@@ -195,40 +212,16 @@ class Sphere : public SceneNode {
   Sphere(const Vector &center, float radius, const Material &material)
       : center_(center), radius_(radius), material_(material) {}
 
-  bool intersects(const Ray &ray, float &distance) const override {
-    return false; // TODO: implement me
+  bool intersects(const Ray &ray) const override {
+    auto line     = center_ - ray.origin;
+    auto adjacent = line.dot(ray.direction);
+    auto distance = line.dot(line) - (adjacent * adjacent);
+
+    return distance < (radius_ * radius_);
   }
 
-  const Material &material() const override {
+  const Material &getMaterial() const override {
     return material_;
-  }
-
-  const Vector &position() const override {
-    return center_;
-  }
-
- private:
-  Vector   center_;
-  float    radius_;
-  Material material_;
-};
-
-/** Defines a cube in the scene. */
-class Cube : public SceneNode {
- public:
-  Cube(const Vector &center, float radius, const Material &material)
-      : center_(center), radius_(radius), material_(material) {}
-
-  bool intersects(const Ray &ray, float &distance) const override {
-    return false; // TODO: implement me
-  }
-
-  const Material &material() const override {
-    return material_;
-  }
-
-  const Vector &position() const override {
-    return center_;
   }
 
  private:
@@ -239,14 +232,18 @@ class Cube : public SceneNode {
 
 /** Defines a scene for use in our ray-tracing algorithm. */
 class Scene {
-  const int MaxTraceDepth = 3;
+  static const int MaxTraceDepth = 3;
 
  public:
   Scene(const Color &backgroundColor,
         const Camera &camera,
         const std::vector<Light> &lights,
         const std::vector<SceneNode *> &nodes)
-      : backgroundColor_(backgroundColor), camera_(camera), lights_(lights), nodes_(nodes) {
+      :
+      backgroundColor_(backgroundColor),
+      camera_(camera),
+      lights_(lights),
+      nodes_(nodes) {
   }
 
   ~Scene() {
@@ -256,15 +253,23 @@ class Scene {
   }
 
   /** Renders the scene to an image of RGBA pixels. */
-  std::unique_ptr<Image<Color>> render(int width, int height) const {
-    auto image = std::make_unique<Image<Color>>(width, height);
+  std::unique_ptr<Image> render(uint32_t width, uint32_t height) const {
+    auto image = std::make_unique<Image>(width, height);
 
     for (int y = 0; y < height; ++y) {
       for (int x = 0; x < width; ++x) {
-        auto ray   = project(x, y, width, height, 75, 16 / 9);
-        auto color = sample(ray, 0, MaxTraceDepth);
+        // project a ray into the scene for each pixel in our resultant image
+        const auto ray = project(x, y, width, height);
 
-        image->set(x, y, color);
+        for (const auto &node : nodes_) {
+          if (node->intersects(ray)) {
+            // if the ray intersects with an object, apply it's material to the image
+            image->set(x, y, node->getMaterial().diffuse);
+          } else {
+            // otherwise, sample the background color
+            image->set(x, y, backgroundColor_);
+          }
+        }
       }
     }
 
@@ -272,107 +277,23 @@ class Scene {
   }
 
  private:
-  /** Projects a ray into the scene. */
-  Ray project(float x, float y, int width, int height, float angle, float aspectRatio) const {
-    auto pX = (2 * ((x + 0.5) / width) - 1) * angle * aspectRatio;
-    auto pY = 1 - 2 * ((y + 0.5) / height) * angle;
+  /** Projects a ray into the scene at the given coordinates. */
+  Ray project(float x, float y, float width, float height) const {
+    assert(width > height);
 
-    auto direction = Vector(pX, pY, -1);
+    auto fov_adjustment = tan(to_radians(camera_.fieldOfView) / 2.0);
+    auto aspect_ratio   = width / height;
+    auto sensor_x       = ((((x + 0.5) / width) * 2.0 - 1.0) * aspect_ratio) * fov_adjustment;
+    auto sensor_y       = (1.0f - ((y + 0.5) / height) * 2.0) * fov_adjustment;
+
+    auto direction = Vector(sensor_x, sensor_y, -1.0).normalize();
 
     return Ray(Vector::Zero, direction);
   }
 
-  /** Samples the color by projecting the given ray into the scene. */
-  Color sample(const Ray &ray, int depth, const int maxDepth) const {
-    float     distance = 0.0f;
-    SceneNode *node    = nullptr;
-    Vector    hit(0, 0, 0);
-    Vector    normal(0, 0, 0);
+  /** Converts the given value to radians from degrees. */
+  inline static float to_radians(float degrees) {
 
-    // no object? just use the image background color
-    if (!findIntersection(ray, node, hit, normal)) {
-      return backgroundColor_;
-    }
-
-    // sample image color, apply transparency and reflectivity
-    const auto material     = node->material();
-    auto       sampledColor = Color::Black;
-
-    if ((material.transparency > 0 || material.reflectivity > 0) && depth < maxDepth) {
-      // compute the fresnel lens effect for reflective/transparent surfaces
-      auto inside = false;
-      if (ray.direction.dot(normal) > 0) {
-        normal = normal.negate();
-        inside = true;
-      }
-
-      const auto fresnel = computeFresnel(ray.direction, normal);
-
-      // compute reflective and refractive color by recursively tracing light along reflective and
-      // refractive angles; then combine the resultant colours
-      auto reflectiveColor = sample(ray.reflect(hit, normal), depth + 1, maxDepth);
-      auto refractiveColor = Color::Black;
-
-      if (material.transparency > 0) {
-        reflectiveColor = sample(ray.refract(hit, normal, inside), depth + 1, maxDepth);
-      }
-
-      sampledColor = reflectiveColor * fresnel + refractiveColor * (1 - fresnel) * material.transparency * material.diffuse;
-    } else {
-      // compute diffuse illumination, accounting for light sources and shadows
-      for (const auto &light : lights_) {
-        auto transmission = Color::White;
-        auto lightRay     = Ray(hit + normal, light.position - hit);
-
-        // determine if the object is in shadow, eliminate color transmission
-        for (const auto &other : nodes_) {
-          if (other->intersects(lightRay, distance)) {
-            transmission = Color::Black;
-            break;
-          }
-        }
-
-        sampledColor = sampledColor + material.diffuse * transmission * fmax(0, normal.dot(lightRay.direction)) * light.emissive;
-      }
-    }
-
-    return sampledColor;
-  }
-
-  /** Determines if any scene node intersects the given ray. */
-  bool findIntersection(const Ray &ray, SceneNode *&intersection, Vector &hit, Vector &normal) const {
-    auto distance = 0.0f;
-    auto nearest  = 999999999.0f;
-
-    // find the nearest object along the ray direction
-    for (const auto &node : nodes_) {
-      if (node->intersects(ray, distance)) {
-        if (distance < nearest) {
-          nearest      = distance;
-          intersection = node;
-        }
-      }
-    }
-
-    // calculate hit and normals
-    if (intersection != nullptr) {
-      hit    = ray.origin + ray.direction * nearest;
-      normal = hit - intersection->position();
-
-      return true;
-    }
-
-    return false;
-  }
-
-  /** Computes the fresnel lens effect for reflective/transparent surfaces
-   *  see https://en.wikipedia.org/wiki/Fresnel_lens for more information. */
-  inline float computeFresnel(const Vector &normal, const Vector &direction) const {
-    return mix(pow(1 + direction.dot(normal), 3), 1, 0.1);
-  }
-
-  inline float mix(float a, float b, float mix) const {
-    return b * mix + a * (1 - mix);
   }
 
  private:
@@ -382,7 +303,7 @@ class Scene {
   std::vector<SceneNode *> nodes_;
 };
 
-/** A builder for constructing new scenes. */
+/** A builder syntax for constructing new scenes. */
 class SceneBuilder {
  public:
   SceneBuilder &setBackgroundColor(const Color &color) {
@@ -422,20 +343,28 @@ class SceneBuilder {
   std::vector<SceneNode *> nodes_;
 };
 
-// the scene to be rendered by the ray-tracer
-static const auto scene = SceneBuilder()
-    .setBackgroundColor(Color::White)
-    .setCamera(Vector::Zero)
-    .addLight(Light(Vector(-20, 30, 20), Color::White))
-    .addNode(new Sphere(Vector(5, -1, -15), 2.0, Color::Red))
-    .addNode(new Sphere(Vector(3, 0, -35), 2.0, Color::Green))
-    .addNode(new Sphere(Vector(-5, 0, -15), 3.0, Color::Blue))
-    .build();
-
 /** Entry point for the ray-tracer. */
 int main() {
-  auto image = scene->render(1920, 1080);
+  try {
+    // the scene to be rendered by the ray-tracer
+    std::cout << "Building scene configuration" << std::endl;
+    const auto scene = SceneBuilder()
+        .setBackgroundColor(Color::Black)
+        .setCamera(Camera(90.0f))
+        .addNode(new Sphere(Vector(0, 0, -5), 1.0, Color::Green))
+        .build();
 
+    // render the scene into an in-memory bitmap
+    std::cout << "Rendering scene to image" << std::endl;
+    const auto image = scene->render(800, 600);
+
+    // render the bitmap to a .png file
+    std::cout << "Rendering image to .PNG file" << std::endl;
+    image->save("output.png");
+  } catch (const std::exception &e) {
+    std::cerr << "An unexpected error occurred:" << e.what() << std::endl;
+    return -1;
+  }
   return 0;
 }
 

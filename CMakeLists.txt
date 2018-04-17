@@ -10,3 +10,4 @@ project(raytracer)
 set(CMAKE_CXX_STANDARD 17)
 
 add_executable(raytracer raytracer.cpp)
+target_link_libraries(raytracer png)

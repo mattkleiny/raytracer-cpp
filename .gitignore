@@ -1,5 +1,5 @@
 .idea/
-*.iml
+output.png
 
 ### CMake template
 CMakeCache.txt
