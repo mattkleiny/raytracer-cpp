@@ -365,13 +365,17 @@ class Scene {
  public:
   Scene(const Color &backgroundColor,
         const Camera &camera,
-        const std::vector<Light> &lights,
+        const std::vector<Light *> &lights,
         const std::vector<SceneNode *> &nodes)
       : backgroundColor_(backgroundColor), camera_(camera), lights_(lights), nodes_(nodes) {
   }
 
   ~Scene() {
-    // we've taken direct ownership of the scene nodes; so go ahead and manually deallocate them
+    // we've taken direct ownership of the scene nodes and lights;
+    // so go ahead and manually deallocate them
+    for (const auto light: lights_) {
+      delete light;
+    }
     for (const auto node : nodes_) {
       delete node;
     }
@@ -401,16 +405,16 @@ class Scene {
           auto color = Color::Black;
 
           for (const auto &light : lights_) {
-            const auto directionToLight = -light.direction;
+            const auto directionToLight = -light->direction;
 
             // cast a ray from the intersection point back to the light to see if we're in shadow
             const auto shadowRay = Ray(hitPoint + surfaceNormal * Epsilon, directionToLight);
             const auto inShadow  = trace(shadowRay).valid();
 
             // mix light color based on distance and intensity
-            const auto lightPower     = surfaceNormal.dot(directionToLight) * (inShadow ? 0.0f : light.intensity);
+            const auto lightPower     = surfaceNormal.dot(directionToLight) * (inShadow ? 0.0f : light->intensity);
             const auto lightReflected = material.albedo / M_PI;
-            const auto lightColor     = light.emissive * lightPower * lightReflected;
+            const auto lightColor     = light->emissive * lightPower * lightReflected;
 
             color = color + material.albedo * lightColor;
           }
@@ -483,7 +487,7 @@ class Scene {
  private:
   Camera                   camera_;
   Color                    backgroundColor_;
-  std::vector<Light>       lights_;
+  std::vector<Light *>     lights_;
   std::vector<SceneNode *> nodes_;
 };
 
@@ -500,7 +504,7 @@ class SceneBuilder {
     return *this;
   }
 
-  SceneBuilder &addLight(const Light &light) {
+  SceneBuilder &addLight(Light *light) {
     lights_.push_back(light);
     return *this;
   }
@@ -523,7 +527,7 @@ class SceneBuilder {
  private:
   Camera                   camera_;
   Color                    backgroundColor_;
-  std::vector<Light>       lights_;
+  std::vector<Light *>     lights_;
   std::vector<SceneNode *> nodes_;
 };
 
@@ -537,8 +541,8 @@ int main() {
         .addNode(new Sphere(Vector(3, 0, -5), 1.0, Color::Green))
         .addNode(new Sphere(Vector(-3, 0, -5), 1.0, Color::Red))
         .addNode(new Plane(Vector(0, -3, 0), -Vector::UnitY, Color::White))
-        .addLight(Light(-Vector::UnitY, Color::White, 0.8f))
-        .addLight(Light(-Vector::UnitX, Color::White, 0.3f))
+        .addLight(new Light(-Vector::UnitY, Color::White, 0.8f))
+        .addLight(new Light(-Vector::UnitX, Color::White, 0.3f))
         .build();
 
     // render the scene into an in-memory bitmap
@@ -552,4 +556,3 @@ int main() {
   }
   return 0;
 }
-
