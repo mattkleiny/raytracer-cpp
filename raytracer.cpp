@@ -35,14 +35,19 @@ class Optional {
 
   /** Retrieves the underlying value from the optional.
    * Asserts the value is valid before accessing. */
-  T value() const {
+  T get() const {
     assert(valid_);
     return value_;
   }
 
   /** Determines if the value is present. */
-  bool valid() const {
+  bool isValid() const {
     return valid_;
+  }
+
+  /** Determines if the value is not present. */
+  bool isEmpty() const {
+    return !valid_;
   }
 
  private:
@@ -125,21 +130,23 @@ class Image {
     pixels_ = new Color[width * height];
   }
 
+  Image(const Image &image) = delete;
+
   ~Image() {
     delete[] pixels_;
   }
 
-  uint32_t width() const { return width_; }
-  uint32_t height() const { return height_; }
+  uint32_t getWidth() const { return width_; }
+  uint32_t getHeight() const { return height_; }
 
-  const Color &get(uint32_t x, uint32_t y) const {
+  const Color &getPixel(uint32_t x, uint32_t y) const {
     assert(x < width_);
     assert(y < height_);
 
     return pixels_[x + y * width_];
   }
 
-  void set(uint32_t x, uint32_t y, const Color &color) {
+  void setPixel(uint32_t x, uint32_t y, const Color &color) {
     assert(x < width_);
     assert(y < height_);
 
@@ -305,7 +312,7 @@ class SphericalLight : public Light {
 /** Defines a camera in the scene. */
 struct Camera {
   Camera() : Camera(90.0f) {}
-  explicit Camera(double fieldOfView) : fieldOfView(fieldOfView) {}
+  Camera(double fieldOfView) : fieldOfView(fieldOfView) {}
 
   double fieldOfView;
 };
@@ -324,7 +331,7 @@ class SceneNode {
   virtual UV calculateUV(const Vector &point) const =0;
 
   /** Returns the material to use when rendering this node. */
-  virtual const Material &material() const =0;
+  virtual const Material &getMaterial() const =0;
 };
 
 /** Defines a sphere in the scene. */
@@ -369,7 +376,7 @@ class Sphere : public SceneNode {
     return UV(u, v);
   }
 
-  const Material &material() const override {
+  const Material &getMaterial() const override {
     return material_;
   }
 
@@ -408,7 +415,7 @@ class Plane : public SceneNode {
     return UV(0, 0); // TODO: implement me
   }
 
-  const Material &material() const override {
+  const Material &getMaterial() const override {
     return material_;
   }
 
@@ -423,9 +430,9 @@ class Scene {
  public:
   Scene(const Color &backgroundColor,
         const Camera &camera,
-        std::vector<std::shared_ptr<Light>> lights,
-        std::vector<std::shared_ptr<SceneNode>> nodes)
-      : backgroundColor_(backgroundColor), camera_(camera), lights_(std::move(lights)), nodes_(std::move(nodes)) {
+        const std::vector<std::shared_ptr<Light>> &lights,
+        const std::vector<std::shared_ptr<SceneNode>> &nodes)
+      : backgroundColor_(backgroundColor), camera_(camera), lights_(lights), nodes_(nodes) {
   }
 
   /** Renders the scene to an image of RGBA pixels. */
@@ -439,23 +446,23 @@ class Scene {
         const auto intersection = trace(cameraRay);
 
         // if we're able to locate a valid intersection for this ray
-        if (intersection.valid()) {
-          const auto distance = intersection.value().distance;
-          const auto node     = intersection.value().node;
-          const auto material = node->material();
+        if (intersection.isValid()) {
+          const auto distance = intersection.get().distance;
+          const auto node     = intersection.get().node;
+          const auto material = node->getMaterial();
 
           // calculate the hit point on the surface of the object
           const auto hitPoint      = cameraRay.origin + cameraRay.direction * distance;
           const auto surfaceNormal = node->calculateNormal(hitPoint);
 
-          // evaluate color for this pixel based on the object and it's surrounding lights
+          // evaluate color for this pixel based on the material and it's surrounding lights
           const auto color = light(distance, material, hitPoint, surfaceNormal);
 
           // sample the resultant color
-          image->set(x, y, color.clamp());
+          image->setPixel(x, y, color.clamp());
         } else {
           // sample the background color, otherwise
-          image->set(x, y, backgroundColor_);
+          image->setPixel(x, y, backgroundColor_);
         }
       }
     }
@@ -498,8 +505,8 @@ class Scene {
       const auto intersection = node->intersects(ray);
 
       // if our ray intersects with the node
-      if (intersection.valid()) {
-        const auto hitDistance = intersection.value();
+      if (intersection.isValid()) {
+        const auto hitDistance = intersection.get();
 
         // and the intersection point is the closest we've located so far
         if (hitDistance < distance) {
@@ -531,7 +538,7 @@ class Scene {
 
           // cast a ray from the intersection point back to the light to see if we're in shadow
           const auto shadowRay = Ray(hitPoint + surfaceNormal * Epsilon, directionToLight);
-          const auto inShadow  = trace(shadowRay).valid();
+          const auto inShadow  = trace(shadowRay).isValid();
 
           // mix light color based on distance and intensity
           const auto lightPower     = surfaceNormal.dot(directionToLight) * (inShadow ? 0.0f : light->intensity);
@@ -552,7 +559,7 @@ class Scene {
           // cast a ray from the intersection point back to the light to see if we're in shadow
           const auto shadowRay          = Ray(hitPoint + surfaceNormal * Epsilon, directionToLight);
           const auto shadowIntersection = trace(shadowRay);
-          const auto inLight            = !shadowIntersection.valid() || shadowIntersection.value().distance > (light->position - hitPoint).magnitude();
+          const auto inLight            = !shadowIntersection.isValid() || shadowIntersection.get().distance > (light->position - hitPoint).magnitude();
 
           // mix light color based on distance and intensity
           const auto lightPower     = surfaceNormal.dot(directionToLight) * (inLight ? (light->intensity / (4.0 * M_PI * distance)) : 0.0f);
@@ -619,27 +626,25 @@ class SceneBuilder {
 
 /** Entry point for the ray-tracer. */
 int main() {
-  try {
-    // the scene to be rendered by the ray-tracer
-    const auto scene = SceneBuilder()
-        .setBackgroundColor(Color::Black)
-        .setCamera(Camera(70.0))
-        .addNode(new Sphere(Vector(5, -1, -15), 2.0, Material(Color::Blue, 0.33f, 0.1f)))
-        .addNode(new Sphere(Vector(3, 0, -35), 1.0, Color::Green))
-        .addNode(new Sphere(Vector(-5.5, 0, -15), 1.0, Color::Red))
-        .addNode(new Plane(Vector(0, -4.2, 0), -Vector::UnitY, Color::White))
-        .addLight(new DirectionalLight(Vector(-1, -1, 0), Color::White, 1.0f))
-        .addLight(new DirectionalLight(Vector(1, -1, 0), Color::White, 0.33f))
-        .build();
+  std::cout << "Rendering scene to output.png" << std::endl;
 
-    // render the scene into an in-memory bitmap
-    const auto image = scene->render(800, 600);
+  // the scene to be rendered by the ray-tracer
+  const auto scene = SceneBuilder()
+      .setBackgroundColor(Color::Black)
+      .setCamera(Camera(70.0))
+      .addNode(new Sphere(Vector(5, -1, -15), 2.0, Material(Color::Blue, 0.33f, 0.1f)))
+      .addNode(new Sphere(Vector(3, 0, -35), 1.0, Color::Green))
+      .addNode(new Sphere(Vector(-5.5, 0, -15), 1.0, Color::Red))
+      .addNode(new Plane(Vector(0, -4.2, 0), -Vector::UnitY, Color::White))
+      .addLight(new DirectionalLight(Vector(-1, -1, 0), Color::White, 1.0f))
+      .addLight(new DirectionalLight(Vector(1, -1, 0), Color::White, 0.33f))
+      .build();
 
-    // render the bitmap to a .png file
-    image->save("output.png");
-  } catch (const std::exception &e) {
-    std::cerr << "An unexpected error occurred:" << e.what() << std::endl;
-    return -1;
-  }
+  // render the scene into an in-memory bitmap
+  const auto image = scene->render(800, 600);
+
+  // render the bitmap to a .png file
+  image->save("output.png");
+
   return 0;
 }
