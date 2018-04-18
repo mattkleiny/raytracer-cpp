@@ -8,7 +8,6 @@
 #include <memory>
 #include <vector>
 #include <cmath>
-#include <cassert>
 #include <png++/png.hpp>
 
 /** Minimum resolution for our floating-point comparisons. */
@@ -73,10 +72,7 @@ struct Color {
   Color(double red, double green, double blue) : Color(red, green, blue, 1.0f) {}
   Color(double red, double green, double blue, double alpha) : r(red), g(green), b(blue), a(alpha) {}
 
-  double r;
-  double g;
-  double b;
-  double a;
+  double r, g, b, a;
 
   /** Clamps all of the color ranges between (0, 1). */
   Color clamp() const {
@@ -108,6 +104,10 @@ struct Color {
     return Color(r * other.r, g * other.g, b * other.b, a * other.a);
   }
 
+  Color operator/(const Color &other) const {
+    return Color(r / other.r, g / other.g, b / other.b, a / other.a);
+  }
+
   static const Color Black;
   static const Color Red;
   static const Color Green;
@@ -125,32 +125,59 @@ const Color Color::White(1, 1, 1);
 /** A bit-mapped image of pixels. */
 class Image {
  public:
+  Image(const Image &image) = delete;
+
   Image(uint32_t width, uint32_t height)
       : width_(width), height_(height) {
     pixels_ = new Color[width * height];
   }
 
-  Image(const Image &image) = delete;
-
   ~Image() {
     delete[] pixels_;
   }
 
-  uint32_t getWidth() const { return width_; }
-  uint32_t getHeight() const { return height_; }
+  uint32_t width() const { return width_; }
+  uint32_t height() const { return height_; }
 
-  const Color &getPixel(uint32_t x, uint32_t y) const {
+  const Color &get(uint32_t x, uint32_t y) const {
     assert(x < width_);
     assert(y < height_);
 
     return pixels_[x + y * width_];
   }
 
-  void setPixel(uint32_t x, uint32_t y, const Color &color) {
+  void set(uint32_t x, uint32_t y, const Color &color) {
     assert(x < width_);
     assert(y < height_);
 
     pixels_[x + y * width_] = color;
+  }
+
+  /** Loads an image from the given path. */
+  static Image *load(const char *path) {
+    const auto image = png::image<png::basic_rgba_pixel<uint8_t>>(path);
+
+    auto result = new Image(
+        static_cast<uint32_t>(image.get_width()),
+        static_cast<uint32_t>(image.get_height())
+    );
+
+    // transfer pixels, correcting for gamma
+    for (uint32_t y = 0; y < result->height(); ++y) {
+      for (uint32_t x = 0; x < result->width(); ++x) {
+        const auto source    = image.get_pixel(x, y);
+        const auto corrected = Color(
+            static_cast<float>(decodeGamma(source.red) * 255),
+            static_cast<float>(decodeGamma(source.green) * 255),
+            static_cast<float>(decodeGamma(source.blue) * 255),
+            255
+        );
+
+        result->set(x, y, corrected);
+      }
+    }
+
+    return result;
   }
 
   /** Exports the image to a file at the given path. */
@@ -160,11 +187,11 @@ class Image {
     for (uint32_t y = 0; y < height_; ++y) {
       for (uint32_t x = 0; x < width_; ++x) {
         // sample the pixel, re-encode to byte representation with gamma correction
-        const auto pixel     = pixels_[x + y * width_];
+        const auto source    = pixels_[x + y * width_];
         const auto corrected = png::basic_rgba_pixel<uint8_t>(
-            static_cast<uint8_t>(gamma(pixel.r) * 255.0),
-            static_cast<uint8_t>(gamma(pixel.g) * 255.0),
-            static_cast<uint8_t>(gamma(pixel.b) * 255.0),
+            static_cast<uint8_t>(encodeGamma(source.r) * 255.0),
+            static_cast<uint8_t>(encodeGamma(source.g) * 255.0),
+            static_cast<uint8_t>(encodeGamma(source.b) * 255.0),
             255
         );
 
@@ -176,10 +203,14 @@ class Image {
   }
 
  private:
-  /** Corrects gamma over the given linear input. */
-  static inline double gamma(double linear) {
-    const double Factor = 2.2f;
-    return pow(linear, 1.0f / Factor);
+  static constexpr double Gamma = 2.2f;
+
+  static inline double encodeGamma(double linear) {
+    return pow(linear, 1.0f / Gamma);
+  }
+
+  static inline double decodeGamma(double linear) {
+    return pow(linear, Gamma);
   }
 
   uint32_t width_;
@@ -197,6 +228,14 @@ struct Vector {
 
   double dot(const Vector &other) const {
     return x * other.x + y * other.y + z * other.z;
+  }
+
+  Vector cross(const Vector &other) const {
+    const auto i = y * other.z - z * other.y;
+    const auto j = z * other.x - x * other.z;
+    const auto k = x * other.y - y * other.x;
+
+    return Vector(i, j, k);
   }
 
   double magnitude() const {
@@ -246,17 +285,6 @@ struct Ray {
   Vector direction;
 };
 
-/** Defines the material for some scene node. */
-struct Material {
-  Material(const Color &albedo) : Material(albedo, 0, 0) {}
-  Material(const Color &albedo, double reflectivity, double transpareny)
-      : albedo(albedo), reflectivity(reflectivity), transparency(transpareny) {}
-
-  Color  albedo;
-  double reflectivity;
-  double transparency;
-};
-
 /** Encapsulates UV texture mapping coordinates. */
 struct UV {
   UV() : UV(0, 0) {}
@@ -264,6 +292,58 @@ struct UV {
 
   double u;
   double v;
+};
+
+/** Defines the material for some scene node. */
+class Material {
+ public:
+  /** Samples the material at the given UV coordinates and returns the color. */
+  virtual Color sample(const UV &coords) const =0;
+};
+
+/** A solid material defined of a single color. */
+class SolidMaterial : public Material {
+ public:
+  explicit SolidMaterial(const Color &albedo) : albedo_(albedo) {}
+
+  Color sample(const UV &coords) const override {
+    return albedo_;
+  }
+
+ private:
+  Color albedo_;
+};
+
+/** A material defined by some texture source. */
+class TexturedMaterial : public Material {
+ public:
+  explicit TexturedMaterial(Image *image) : image_(image) {}
+
+  Color sample(const UV &coords) const override {
+    const auto x = wrap(coords.u, image_->width());
+    const auto y = wrap(coords.v, image_->height());
+
+    const auto color = image_->get(x, y);
+
+    return color;
+  }
+
+ private:
+  /** Wraps the given floating point range between 0 and the given upper bound. */
+  static uint32_t wrap(double value, uint32_t bound) {
+    const auto signedBound = static_cast<int32_t>(bound);
+    const auto floatCoord  = value * static_cast<double>(bound);
+
+    const auto wrappedCoord = (static_cast<int32_t>(floatCoord)) % signedBound;
+
+    if (wrappedCoord < 0) {
+      return static_cast<uint32_t>(wrappedCoord + signedBound);
+    } else {
+      return static_cast<uint32_t>(wrappedCoord);
+    }
+  }
+
+  std::shared_ptr<Image> image_;
 };
 
 /** Defines a light in the scene. */
@@ -312,7 +392,7 @@ class SphericalLight : public Light {
 /** Defines a camera in the scene. */
 struct Camera {
   Camera() : Camera(90.0f) {}
-  Camera(double fieldOfView) : fieldOfView(fieldOfView) {}
+  explicit Camera(double fieldOfView) : fieldOfView(fieldOfView) {}
 
   double fieldOfView;
 };
@@ -331,13 +411,13 @@ class SceneNode {
   virtual UV calculateUV(const Vector &point) const =0;
 
   /** Returns the material to use when rendering this node. */
-  virtual const Material &getMaterial() const =0;
+  virtual const Material *getMaterial() const =0;
 };
 
 /** Defines a sphere in the scene. */
 class Sphere : public SceneNode {
  public:
-  Sphere(const Vector &center, double radius, const Material &material)
+  Sphere(const Vector &center, double radius, Material *material)
       : center_(center), radius_(radius), material_(material) {}
 
   Optional<double> intersects(const Ray &ray) const override {
@@ -376,27 +456,28 @@ class Sphere : public SceneNode {
     return UV(u, v);
   }
 
-  const Material &getMaterial() const override {
-    return material_;
+  const Material *getMaterial() const override {
+    return material_.get();
   }
 
  private:
-  Vector   center_;
-  double   radius_;
-  Material material_;
+  Vector center_;
+  double radius_;
+
+  std::shared_ptr<Material> material_;
 };
 
 /** Defines a plane in the scene. */
 class Plane : public SceneNode {
  public:
-  Plane(const Vector &point, const Vector &normal, const Material &material)
-      : point_(point), normal_(normal), material_(material) {}
+  Plane(const Vector &origin, const Vector &normal, Material *material)
+      : origin_(origin), normal_(normal), material_(material) {}
 
   Optional<double> intersects(const Ray &ray) const override {
     const auto d = normal_.dot(ray.direction);
 
     if (d >= Epsilon) {
-      const auto direction = point_ - ray.origin;
+      const auto direction = origin_ - ray.origin;
       const auto distance  = direction.dot(normal_) / d;
 
       if (distance >= 0.0f) {
@@ -412,17 +493,29 @@ class Plane : public SceneNode {
   }
 
   UV calculateUV(const Vector &point) const override {
-    return UV(0, 0); // TODO: implement me
+    auto axisX = normal_.cross(Vector::UnitZ);
+    if (axisX.magnitude() == 0.0) {
+      axisX = normal_.cross(Vector::UnitY);
+    }
+    auto axisY = normal_.cross(axisX);
+
+    auto line = point - origin_;
+
+    const auto u = line.dot(axisX);
+    const auto v = line.dot(axisY);
+
+    return UV(u, v);
   }
 
-  const Material &getMaterial() const override {
-    return material_;
+  const Material *getMaterial() const override {
+    return material_.get();
   }
 
  private:
-  Vector   point_;
-  Vector   normal_;
-  Material material_;
+  Vector origin_;
+  Vector normal_;
+
+  std::shared_ptr<Material> material_;
 };
 
 /** Defines a scene for use in our ray-tracing algorithm. */
@@ -454,15 +547,16 @@ class Scene {
           // calculate the hit point on the surface of the object
           const auto hitPoint      = cameraRay.origin + cameraRay.direction * distance;
           const auto surfaceNormal = node->calculateNormal(hitPoint);
+          const auto surfaceUV     = node->calculateUV(hitPoint);
 
           // evaluate color for this pixel based on the material and it's surrounding lights
-          const auto color = light(distance, material, hitPoint, surfaceNormal);
+          const auto color = light(distance, material, hitPoint, surfaceNormal, surfaceUV);
 
           // sample the resultant color
-          image->setPixel(x, y, color.clamp());
+          image->set(x, y, color.clamp());
         } else {
           // sample the background color, otherwise
-          image->setPixel(x, y, backgroundColor_);
+          image->set(x, y, backgroundColor_);
         }
       }
     }
@@ -521,55 +615,30 @@ class Scene {
 
   /** Applies lighting to some object's material by evaluating all lights in the scene relative to it's intersection information. */
   Color light(const double distance,
-              const Material &material,
+              const Material *material,
               const Vector &hitPoint,
-              const Vector &surfaceNormal) const {
-    auto color = Color::Black;
+              const Vector &surfaceNormal,
+              const UV &surfaceUV) const {
+    auto       color  = Color::Black;
+    const auto albedo = material->sample(surfaceUV);
 
     // walk through all lights in the scene
-    for (const auto &light__ : lights_) {
-      // individually handle each lighting algorithm
-      // TODO: tidy up polymorphic lights
-      switch (light__->type()) {
-        case Light::DIRECTIONAL: {
-          const auto light = dynamic_cast<DirectionalLight *>(light__.get());
+    // TODO: handle spherical lights as well
+    for (const auto &sceneLight : lights_) {
+      const auto light = dynamic_cast<DirectionalLight *>(sceneLight.get());
 
-          const auto directionToLight = -light->direction;
+      const auto directionToLight = -light->direction;
 
-          // cast a ray from the intersection point back to the light to see if we're in shadow
-          const auto shadowRay = Ray(hitPoint + surfaceNormal * Epsilon, directionToLight);
-          const auto inShadow  = trace(shadowRay).isValid();
+      // cast a ray from the intersection point back to the light to see if we're in shadow
+      const auto shadowRay = Ray(hitPoint + surfaceNormal * Epsilon, directionToLight);
+      const auto inShadow  = trace(shadowRay).isValid();
 
-          // mix light color based on distance and intensity
-          const auto lightPower     = surfaceNormal.dot(directionToLight) * (inShadow ? 0.0f : light->intensity);
-          const auto lightReflected = material.albedo / M_PI;
-          const auto lightColor     = light->emissive * lightPower * lightReflected;
+      // mix light color based on distance and intensity
+      const auto lightPower     = surfaceNormal.dot(directionToLight) * (inShadow ? 0.0f : light->intensity);
+      const auto lightReflected = albedo / M_PI;
+      const auto lightColor     = light->emissive * lightPower * lightReflected;
 
-          color = color + material.albedo * lightColor;
-        }
-          break;
-
-        case Light::SPHERICAL: {
-          // TODO: fix spherical lighting
-          const auto light = dynamic_cast<SphericalLight *>(light__.get());
-
-          const auto distanceToLight  = (light->position - hitPoint).normalize();
-          const auto directionToLight = distanceToLight;
-
-          // cast a ray from the intersection point back to the light to see if we're in shadow
-          const auto shadowRay          = Ray(hitPoint + surfaceNormal * Epsilon, directionToLight);
-          const auto shadowIntersection = trace(shadowRay);
-          const auto inLight            = !shadowIntersection.isValid() || shadowIntersection.get().distance > (light->position - hitPoint).magnitude();
-
-          // mix light color based on distance and intensity
-          const auto lightPower     = surfaceNormal.dot(directionToLight) * (inLight ? (light->intensity / (4.0 * M_PI * distance)) : 0.0f);
-          const auto lightReflected = material.albedo / M_PI;
-          const auto lightColor     = light->emissive * lightPower * lightReflected;
-
-          color = color + material.albedo * lightColor;
-        }
-          break;
-      }
+      color = color + albedo * lightColor;
     }
 
     return color;
@@ -626,16 +695,14 @@ class SceneBuilder {
 
 /** Entry point for the ray-tracer. */
 int main() {
-  std::cout << "Rendering scene to output.png" << std::endl;
-
   // the scene to be rendered by the ray-tracer
   const auto scene = SceneBuilder()
       .setBackgroundColor(Color::Black)
       .setCamera(Camera(70.0))
-      .addNode(new Sphere(Vector(5, -1, -15), 2.0, Material(Color::Blue, 0.33f, 0.1f)))
-      .addNode(new Sphere(Vector(3, 0, -35), 1.0, Color::Green))
-      .addNode(new Sphere(Vector(-5.5, 0, -15), 1.0, Color::Red))
-      .addNode(new Plane(Vector(0, -4.2, 0), -Vector::UnitY, Color::White))
+      .addNode(new Sphere(Vector(5, -1, -15), 2.0, new SolidMaterial(Color::Blue)))
+      .addNode(new Sphere(Vector(3, 0, -35), 1.0, new SolidMaterial(Color::Green)))
+      .addNode(new Sphere(Vector(-5.5, 0, -15), 1.0, new TexturedMaterial(Image::load("textures/checkerboard.png"))))
+      .addNode(new Plane(Vector(0, -4.2, 0), -Vector::UnitY, new SolidMaterial(Color::White)))
       .addLight(new DirectionalLight(Vector(-1, -1, 0), Color::White, 1.0f))
       .addLight(new DirectionalLight(Vector(1, -1, 0), Color::White, 0.33f))
       .build();
