@@ -581,6 +581,11 @@ class Scene {
 
   /** Samples the color at the resultant object by projecting the given ray into the scene with the given max sample depth. */
   Color trace(const Ray &ray, uint32_t depth, uint32_t maxDepth) const {
+    // cap the maximum number of times a ray can bounce within the scene
+    if (depth >= maxDepth) {
+      return backgroundColor_;
+    }
+
     // project a ray into the scene for each pixel in our resultant image
     const auto intersection = findIntersectingObject(ray);
 
@@ -590,7 +595,7 @@ class Scene {
       const auto node     = intersection.get().node;
       const auto material = node->getMaterial();
 
-      // calculate the hit point on the surface of the object
+      // calculate the hit point, normal and UV on the surface of the object
       const auto hitPoint      = ray.origin + ray.direction * distance;
       const auto surfaceNormal = node->calculateNormal(hitPoint);
       const auto surfaceUV     = node->calculateUV(hitPoint);
@@ -662,6 +667,8 @@ class Scene {
     // walk through all lights in the scene
     for (const auto &sceneLight : lights_) {
       const auto lightType = sceneLight->type();
+
+      // HACK: dirty ioc around light types; difficult to get polymorphic behaviour with some much ambient state
       if (lightType == Light::DIRECTIONAL) {
         const auto light = dynamic_cast<DirectionalLight *>(sceneLight.get());
 
