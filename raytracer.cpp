@@ -301,7 +301,7 @@ class Material {
   virtual Color sample(const UV &coords) const =0;
 };
 
-/** A solid material defined of a single color. */
+/** A solid material defined by a single color. */
 class SolidMaterial : public Material {
  public:
   explicit SolidMaterial(const Color &albedo) : albedo_(albedo) {}
@@ -494,9 +494,11 @@ class Plane : public SceneNode {
 
   UV calculateUV(const Vector &point) const override {
     auto axisX = normal_.cross(Vector::UnitZ);
+
     if (axisX.magnitude() == 0.0) {
       axisX = normal_.cross(Vector::UnitY);
     }
+
     auto axisY = normal_.cross(axisX);
 
     auto line = point - origin_;
@@ -589,7 +591,7 @@ class Scene {
     return Ray(Vector::Zero, direction);
   }
 
-  /** Projects a ray into the scene, attempting to locate the closest object. */
+  /** Traces a ray in the scene, attempting to locate the closest object. */
   Optional<Intersection> trace(const Ray &ray) const {
     auto   result   = none<Intersection>();
     double distance = 9999999999.0f;
@@ -623,22 +625,42 @@ class Scene {
     const auto albedo = material->sample(surfaceUV);
 
     // walk through all lights in the scene
-    // TODO: handle spherical lights as well
     for (const auto &sceneLight : lights_) {
-      const auto light = dynamic_cast<DirectionalLight *>(sceneLight.get());
+      const auto lightType = sceneLight->type();
+      if (lightType == Light::DIRECTIONAL) {
+        const auto light = dynamic_cast<DirectionalLight *>(sceneLight.get());
 
-      const auto directionToLight = -light->direction;
+        const auto directionToLight = -light->direction;
 
-      // cast a ray from the intersection point back to the light to see if we're in shadow
-      const auto shadowRay = Ray(hitPoint + surfaceNormal * Epsilon, directionToLight);
-      const auto inShadow  = trace(shadowRay).isValid();
+        // cast a ray from the intersection point back to the light to see if we're in shadow
+        const auto shadowRay = Ray(hitPoint + surfaceNormal * Epsilon, directionToLight);
+        const auto inShadow  = trace(shadowRay).isValid();
 
-      // mix light color based on distance and intensity
-      const auto lightPower     = surfaceNormal.dot(directionToLight) * (inShadow ? 0.0f : light->intensity);
-      const auto lightReflected = albedo / M_PI;
-      const auto lightColor     = light->emissive * lightPower * lightReflected;
+        // mix light color based on distance and intensity
+        const auto lightPower     = surfaceNormal.dot(directionToLight) * (inShadow ? 0.0f : light->intensity);
+        const auto lightReflected = albedo / M_PI;
+        const auto lightColor     = light->emissive * lightPower * lightReflected;
 
-      color = color + albedo * lightColor;
+        color = color + albedo * lightColor;
+      } else if (lightType == Light::SPHERICAL) {
+        const auto light = dynamic_cast<SphericalLight *>(sceneLight.get());
+
+        const auto directionToLight = (light->position - hitPoint).normalize();
+        const auto distanceToLight  = (hitPoint - light->position).magnitude();
+
+        const auto intensity = light->intensity / (4 * M_PI * distanceToLight);
+
+        const auto shadowRay          = Ray(hitPoint + surfaceNormal * Epsilon, directionToLight);
+        const auto shadowIntersection = trace(shadowRay);
+        const auto inLight            = !shadowIntersection.isValid() || shadowIntersection.get().distance > distanceToLight;
+
+        // mix light color based on distance and intensity
+        const auto lightPower     = surfaceNormal.dot(directionToLight) * (inLight ? light->intensity : 0.0);
+        const auto lightReflected = albedo / M_PI;
+        const auto lightColor     = light->emissive * lightPower * lightReflected;
+
+        color = color + albedo * lightColor;
+      }
     }
 
     return color;
@@ -703,8 +725,9 @@ int main() {
       .addNode(new Sphere(Vector(3, 0, -35), 1.0, new SolidMaterial(Color::Green)))
       .addNode(new Sphere(Vector(-5.5, 0, -15), 1.0, new TexturedMaterial(Image::load("textures/checkerboard.png"))))
       .addNode(new Plane(Vector(0, -4.2, 0), -Vector::UnitY, new SolidMaterial(Color::White)))
-      .addLight(new DirectionalLight(Vector(-1, -1, 0), Color::White, 1.0f))
+      .addLight(new DirectionalLight(Vector(-1, -1, 0), Color::White, 0.33f))
       .addLight(new DirectionalLight(Vector(1, -1, 0), Color::White, 0.33f))
+      .addLight(new SphericalLight(Vector(0, 3, 0), Color::White, 1.0f))
       .build();
 
   // render the scene into an in-memory bitmap
