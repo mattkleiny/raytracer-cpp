@@ -281,6 +281,17 @@ struct Ray {
   Ray(const Vector &origin, const Vector &direction)
       : origin(origin), direction(direction) {}
 
+  /** Creates a ray reflected around the given intersection point with the given normal and incidence. */
+  static Ray createReflection(const Vector &normal,
+                              const Vector &incidence,
+                              const Vector &intersection,
+                              double bias) {
+    const auto origin    = intersection + (normal * bias);
+    const auto direction = incidence - (normal * 2.0 * incidence.dot(normal));
+
+    return Ray(origin, direction);
+  }
+
   Vector origin;
   Vector direction;
 };
@@ -297,14 +308,20 @@ struct UV {
 /** Defines the material for some scene node. */
 class Material {
  public:
+  Material(double reflectivity) : reflectivity(reflectivity) {}
+
   /** Samples the material at the given UV coordinates and returns the color. */
   virtual Color sample(const UV &coords) const =0;
+
+  double reflectivity;
 };
 
 /** A solid material defined by a single color. */
 class SolidMaterial : public Material {
  public:
-  explicit SolidMaterial(const Color &albedo) : albedo_(albedo) {}
+  explicit SolidMaterial(const Color &albedo) : SolidMaterial(albedo, 0.0) {}
+  SolidMaterial(const Color &albedo, double reflectivity)
+      : albedo_(albedo), Material(reflectivity) {}
 
   Color sample(const UV &coords) const override {
     return albedo_;
@@ -317,7 +334,9 @@ class SolidMaterial : public Material {
 /** A material defined by some texture source. */
 class TexturedMaterial : public Material {
  public:
-  explicit TexturedMaterial(Image *image) : image_(image) {}
+  explicit TexturedMaterial(Image *image) : TexturedMaterial(image, 0.0) {}
+  TexturedMaterial(Image *image, double reflectivity)
+      : image_(image), Material(reflectivity) {}
 
   Color sample(const UV &coords) const override {
     const auto x = wrap(coords.u, image_->width());
@@ -522,6 +541,9 @@ class Plane : public SceneNode {
 
 /** Defines a scene for use in our ray-tracing algorithm. */
 class Scene {
+  /** Maximum depth for reflection/refraction traces. */
+  static constexpr auto MaxTraceDepth = 3;
+
  public:
   Scene(const Color &backgroundColor,
         const Camera &camera,
@@ -536,30 +558,10 @@ class Scene {
 
     for (uint32_t y = 0; y < height; ++y) {
       for (uint32_t x = 0; x < width; ++x) {
-        // project a ray into the scene for each pixel in our resultant image
-        const auto cameraRay    = project(x, y, width, height);
-        const auto intersection = trace(cameraRay);
+        const auto cameraRay = project(x, y, width, height);
+        const auto color     = trace(cameraRay, 0, MaxTraceDepth);
 
-        // if we're able to locate a valid intersection for this ray
-        if (intersection.isValid()) {
-          const auto distance = intersection.get().distance;
-          const auto node     = intersection.get().node;
-          const auto material = node->getMaterial();
-
-          // calculate the hit point on the surface of the object
-          const auto hitPoint      = cameraRay.origin + cameraRay.direction * distance;
-          const auto surfaceNormal = node->calculateNormal(hitPoint);
-          const auto surfaceUV     = node->calculateUV(hitPoint);
-
-          // evaluate color for this pixel based on the material and it's surrounding lights
-          const auto color = light(distance, material, hitPoint, surfaceNormal, surfaceUV);
-
-          // sample the resultant color
-          image->set(x, y, color.clamp());
-        } else {
-          // sample the background color, otherwise
-          image->set(x, y, backgroundColor_);
-        }
+        image->set(x, y, color.clamp());
       }
     }
 
@@ -577,6 +579,39 @@ class Scene {
     double                     distance;
   };
 
+  /** Samples the color at the resultant object by projecting the given ray into the scene with the given max sample depth. */
+  Color trace(const Ray &ray, uint32_t depth, uint32_t maxDepth) const {
+    // project a ray into the scene for each pixel in our resultant image
+    const auto intersection = findIntersectingObject(ray);
+
+    // if we're able to locate a valid intersection for this ray
+    if (intersection.isValid()) {
+      const auto distance = intersection.get().distance;
+      const auto node     = intersection.get().node;
+      const auto material = node->getMaterial();
+
+      // calculate the hit point on the surface of the object
+      const auto hitPoint      = ray.origin + ray.direction * distance;
+      const auto surfaceNormal = node->calculateNormal(hitPoint);
+      const auto surfaceUV     = node->calculateUV(hitPoint);
+
+      // evaluate color for this pixel based on the material and it's surrounding lights
+      auto color = applyDiffuseShading(distance, material, hitPoint, surfaceNormal, surfaceUV);
+
+      // apply reflective surface properties by reflecting a ray about the surface point and sampling the resultant color
+      if (material->reflectivity > 0) {
+        const auto reflectionRay = Ray::createReflection(surfaceNormal, ray.direction, hitPoint, Epsilon);
+
+        color = color * (1.0 - material->reflectivity);
+        color = color + (trace(reflectionRay, depth + 1, maxDepth) * material->reflectivity);
+      }
+
+      return color;
+    }
+
+    return backgroundColor_;
+  }
+
   /** Projects a ray into the scene at the given coordinates. */
   Ray project(double x, double y, double width, double height) const {
     assert(width > height);
@@ -592,7 +627,7 @@ class Scene {
   }
 
   /** Traces a ray in the scene, attempting to locate the closest object. */
-  Optional<Intersection> trace(const Ray &ray) const {
+  Optional<Intersection> findIntersectingObject(const Ray &ray) const {
     auto   result   = none<Intersection>();
     double distance = 9999999999.0f;
 
@@ -616,11 +651,11 @@ class Scene {
   }
 
   /** Applies lighting to some object's material by evaluating all lights in the scene relative to it's intersection information. */
-  Color light(const double distance,
-              const Material *material,
-              const Vector &hitPoint,
-              const Vector &surfaceNormal,
-              const UV &surfaceUV) const {
+  Color applyDiffuseShading(const double distance,
+                            const Material *material,
+                            const Vector &hitPoint,
+                            const Vector &surfaceNormal,
+                            const UV &surfaceUV) const {
     auto       color  = Color::Black;
     const auto albedo = material->sample(surfaceUV);
 
@@ -634,7 +669,7 @@ class Scene {
 
         // cast a ray from the intersection point back to the light to see if we're in shadow
         const auto shadowRay = Ray(hitPoint + surfaceNormal * Epsilon, directionToLight);
-        const auto inShadow  = trace(shadowRay).isValid();
+        const auto inShadow  = findIntersectingObject(shadowRay).isValid();
 
         // mix light color based on distance and intensity
         const auto lightPower     = surfaceNormal.dot(directionToLight) * (inShadow ? 0.0f : light->intensity);
@@ -651,7 +686,7 @@ class Scene {
         const auto intensity = light->intensity / (4 * M_PI * distanceToLight);
 
         const auto shadowRay          = Ray(hitPoint + surfaceNormal * Epsilon, directionToLight);
-        const auto shadowIntersection = trace(shadowRay);
+        const auto shadowIntersection = findIntersectingObject(shadowRay);
         const auto inLight            = !shadowIntersection.isValid() || shadowIntersection.get().distance > distanceToLight;
 
         // mix light color based on distance and intensity
@@ -721,10 +756,10 @@ int main() {
   const auto scene = SceneBuilder()
       .setBackgroundColor(Color::Black)
       .setCamera(Camera(70.0))
-      .addNode(new Sphere(Vector(5, -1, -15), 2.0, new SolidMaterial(Color::Blue)))
-      .addNode(new Sphere(Vector(3, 0, -35), 1.0, new SolidMaterial(Color::Green)))
-      .addNode(new Sphere(Vector(-5.5, 0, -15), 1.0, new TexturedMaterial(Image::load("textures/checkerboard.png"))))
-      .addNode(new Plane(Vector(0, -4.2, 0), -Vector::UnitY, new SolidMaterial(Color::White)))
+      .addNode(new Sphere(Vector(5, -1, -15), 2.0, new SolidMaterial(Color::Blue, 0.3)))
+      .addNode(new Sphere(Vector(3, 0, -35), 1.0, new SolidMaterial(Color::Green, 0.1)))
+      .addNode(new Sphere(Vector(-5.5, 0, -15), 1.0, new TexturedMaterial(Image::load("textures/checkerboard.png"), 0.3)))
+      .addNode(new Plane(Vector(0, -4.2, 0), -Vector::UnitY, new SolidMaterial(Color::White, 0.1)))
       .addLight(new DirectionalLight(Vector(-1, -1, 0), Color::White, 0.33f))
       .addLight(new DirectionalLight(Vector(1, -1, 0), Color::White, 0.33f))
       .addLight(new SphericalLight(Vector(0, 3, 0), Color::White, 1.0f))
