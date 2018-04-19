@@ -308,7 +308,7 @@ struct UV {
 /** Defines the material for some scene node. */
 class Material {
  public:
-  Material(double reflectivity) : reflectivity(reflectivity) {}
+  explicit Material(double reflectivity) : reflectivity(reflectivity) {}
 
   /** Samples the material at the given UV coordinates and returns the color. */
   virtual Color sample(const UV &coords) const =0;
@@ -766,7 +766,7 @@ int main() {
       .build();
 
   // render the scene into an in-memory bitmap
-  const auto image = scene->render(800, 600);
+  const auto image = scene->render(1024, 768);
 
   // render the bitmap to a .png file
   image->save("output.png");
